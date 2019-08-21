@@ -1,0 +1,28 @@
+# Simple Build Tool
+# http://www.scala-sbt.org/release/docs/Getting-Started/Directories.html#configuring-version-control
+
+dist/*
+target/
+lib_managed/
+src_managed/
+project/boot/
+project/plugins/project/
+.history
+.cache
+.lib/
+.idea/
+
+## https://github.com/github/gitignore/blob/master/Scala.gitignore
+*.class
+*.log
+# docker-compose automatically pulls overrides from this file:
+
+.DS_Store
+
+## python junk for scripts
+__pycache__/
+*.Iml
+
+# files used by metals+vscode
+.metals/
+.bloop/
