@@ -1,6 +1,9 @@
 package scytest.fixture
 
-class FixtureTag(val name: String, val scope: FixtureScope) { type R }
+class FixtureTag private (
+    val name: String,
+    val scope: FixtureScope
+) { type R }
 
 object FixtureTag {
   type Aux[R0] = FixtureTag { type R = R0 }

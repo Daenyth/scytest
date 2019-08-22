@@ -1,11 +1,20 @@
 package scytest.fixture
 
+import cats.kernel.Order
+import cats.implicits._
+
 sealed trait FixtureScope
 
 object FixtureScope {
   case object Process extends FixtureScope
   case object Suite extends FixtureScope
   case object Test extends FixtureScope
+
+  implicit val scopeOrder: Order[FixtureScope] = Order.by {
+    case Test    => 1
+    case Suite   => 2
+    case Process => 3
+  }
 
   /** Implicit evidence that Fix2 is "smaller" than Fix1, ie, can be nested inside */
   trait FitsInside[Fix1, Fix2]

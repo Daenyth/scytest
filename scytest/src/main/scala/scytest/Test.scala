@@ -14,9 +14,7 @@ final class FixturelessTest[F[_]](test: RunnableTest[F]) extends Test[F] {
   def prepare(resource: Unit): RunnableTest[F] = test
 }
 
-trait RunnableTest[F[_]] {
-  def run: F[TestResult]
-}
+case class RunnableTest[F[_]](run: F[TestResult])
 
 object Test {
   type Aux[F[_], R0] = Test[F] { type R = R0 }
