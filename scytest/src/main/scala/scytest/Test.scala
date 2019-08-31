@@ -38,4 +38,7 @@ case class RunnableTest[F[_]](run: F[TestResult])
 
 object Test {
   type Aux[F[_], R0] = Test[F] { type R = R0 }
+
+  def pass[F[_]](name: String)(implicit F: MonadError[F, Throwable]) =
+    new FixturelessTest[F](name, F.pure(Verified))
 }

@@ -5,7 +5,6 @@ import cats.implicits._
 import cats.kernel.CommutativeSemigroup
 
 sealed trait Suite[F[_]] {
-  def name: String
 
   def tests: NonEmptyChain[Test[F]]
 
@@ -18,7 +17,8 @@ object Suite {
   implicit def suiteSemigroup[F[_]]: CommutativeSemigroup[Suite[F]] =
     _.combine(_)
 }
-case class SingleSuite[F[_]](suiteName: String, tests: NonEmptyChain[Test[F]])
+
+case class SingleSuite[F[_]](name: String, tests: NonEmptyChain[Test[F]])
     extends Suite[F] {
 
   def combine(other: Suite[F]): Suite[F] = other match {

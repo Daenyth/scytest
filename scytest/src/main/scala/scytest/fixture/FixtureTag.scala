@@ -3,7 +3,11 @@ package scytest.fixture
 class FixtureTag private (
     val name: String,
     val scope: FixtureScope
-) { type R }
+) {
+  type R
+
+  override val toString: String = s"<Fixture $scope / '$name'>"
+}
 
 object FixtureTag {
   type Aux[R0] = FixtureTag { type R = R0 }

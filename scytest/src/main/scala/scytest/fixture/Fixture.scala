@@ -1,10 +1,9 @@
 package scytest.fixture
 
-import cats.effect.{Resource, Sync}
+import cats.effect.Resource
 import cats.implicits._
 import cats.temp.par._
 import cats.{Applicative, Functor, Monad}
-import scytest.fixture.FixtureTag.Aux
 
 trait Fixture[F[_], R] {
   def get(tag: FixtureTag.Aux[R]): F[R]
@@ -46,7 +45,7 @@ private[fixture] class ResourceFixture[F[_], R](
     val tag: FixtureTag.Aux[R]
 ) extends Fixture[F, R] {
   val _ = resource
-  def get(tag: Aux[R]): F[R] = ???
+  def get(tag: FixtureTag.Aux[R]): F[R] = ???
 
   def initialize: F[Unit] = ???
 
@@ -95,7 +94,7 @@ private[fixture] class PureFixture[F[_], R](value: R)(
     implicit F: Applicative[F]
 ) extends Fixture[F, R] {
 
-  def get(tag: Aux[R]): F[R] = valueF
+  def get(tag: FixtureTag.Aux[R]): F[R] = valueF
 
   private[this] val valueF = F.pure(value)
 
