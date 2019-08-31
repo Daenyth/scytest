@@ -26,3 +26,4 @@ __pycache__/
 # files used by metals+vscode
 .metals/
 .bloop/
+.vscode/

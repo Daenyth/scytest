@@ -13,6 +13,8 @@ lazy val scytest = (project in file("scytest"))
     commonSettings,
     libraryDependencies ++= Seq(
       "co.fs2" %% "fs2-core" % "1.1.0-M1",
-      "io.chrisdavenport" %% "cats-par" % "0.2.1",
+      "io.chrisdavenport" %% "cats-par" % "0.2.1"
     )
   )
+
+lazy val root = (project in file(".")).dependsOn(scytest).aggregate(scytest)
