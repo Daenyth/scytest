@@ -1,9 +1,9 @@
 package scytest.fixture
 
-import cats.effect.Resource
-import cats.{Applicative, Functor, Monad}
+import cats.effect.{Resource, Sync}
 import cats.implicits._
 import cats.temp.par._
+import cats.{Applicative, Functor, Monad}
 import scytest.fixture.FixtureTag.Aux
 
 trait Fixture[F[_], R] {
@@ -21,10 +21,12 @@ object Fixture {
       f: R1 => Fixture[F, R2]
   ): Fixture[F, R2] =
     new FlatMapFixture[F, R1, R2](dependency, f)
+
 }
 
 trait KnownFixture[F[_], R] {
   def get: Fixture[F, R]
+  def tag: FixtureTag.Aux[R]
 }
 
 object KnownFixture {
@@ -34,6 +36,8 @@ object KnownFixture {
   ): KnownFixture[F, (R1, R2)] =
     new KnownFixture[F, (R1, R2)] {
       def get: Fixture[F, (R1, R2)] = new ProductFixture(k1.get, k2.get)
+
+      def tag: FixtureTag.Aux[(R1, R2)] = ???
     }
 }
 
@@ -78,7 +82,7 @@ private[fixture] class FlatMapFixture[F[_]: Monad, RDep, RGet](
   def get(tag: FixtureTag.Aux[RGet]): F[RGet] = ???
 
   def initialize: F[Unit] =
-    // TODO need to cache `rd` and `f(rd)` in a ref
+    // TODO need to cache `rd` and `f(rd)` in a ref/mvar
     dependency.initialize >>
       dependency.get(dependency.tag).flatMap(rd => f(rd).initialize)
 

@@ -21,6 +21,7 @@ class TestRunner[F[_]: Concurrent: ContextShift: Timer](
           .traverse_(close(FixtureScope.Process))
       )
 
+  // TODO suite-scope resources running in parallel will get shared and cross-terminated
   private def runSuite(suite: SingleSuite[F]): Stream[F, TestResult] =
     Stream
       .chain(suite.tests)

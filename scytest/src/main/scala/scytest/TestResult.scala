@@ -1,7 +1,11 @@
 package scytest
 
+import cats.MonadError
 import scytest.fixture.FixtureTag
 import cats.data.NonEmptyVector
+import cats.implicits._
+
+import scala.util.control.NonFatal
 
 sealed trait TestResult extends Product with Serializable
 
@@ -13,4 +17,18 @@ object TestResult {
       extends TestResult
   case class ResourceDead(testName: String, tag: FixtureTag) extends TestResult
   case class Multiple(results: NonEmptyVector[TestResult]) extends TestResult
+
+  def from[F[_]](name: String, test: F[Assertion])(
+      implicit F: MonadError[F, Throwable]
+  ): F[TestResult] =
+    test
+      .map {
+        case Verified => TestResult.Success(name)
+        case f: FailedAssertion =>
+          TestResult.Failed(name, NonEmptyVector.one(f))
+      }
+      .recover {
+        case NonFatal(ex) =>
+          TestResult.Error(name, NonEmptyVector.one(ex))
+      }
 }

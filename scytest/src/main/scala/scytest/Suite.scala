@@ -5,6 +5,8 @@ import cats.implicits._
 import cats.kernel.CommutativeSemigroup
 
 sealed trait Suite[F[_]] {
+  def name: String
+
   def tests: NonEmptyChain[Test[F]]
 
   def combine(other: Suite[F]): Suite[F]
