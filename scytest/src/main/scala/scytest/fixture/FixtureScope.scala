@@ -16,12 +16,12 @@ object FixtureScope {
     case Process => 3
   }
 
-  /** Implicit evidence that Fix2 is "smaller" than Fix1, ie, can be nested inside */
-  trait FitsInside[Fix1, Fix2]
+  /** Implicit evidence that `Inner` is "smaller" than `Outer`, ie, can be nested inside */
+  trait FitsInside[Inner, Outer]
 
-  def fits[Fix1, Fix2](
-      implicit ev: Fix1 FitsInside Fix2
-  ): Fix1 FitsInside Fix2 = ev
+  def fits[Inner, Outer](
+      implicit ev: Inner FitsInside Outer
+  ): Inner FitsInside Outer = ev
 
   private[this] val singleton: Any FitsInside Any = new FitsInside[Any, Any] {}
   implicit val testInsideClass: Test.type FitsInside Suite.type =

@@ -4,104 +4,122 @@ import cats.effect.Resource
 import cats.implicits._
 import cats.temp.par._
 import cats.{Applicative, Functor, Monad}
+import scytest.fixture.FTList._
+import scytest.fixtures.UnitFixture
 
-trait Fixture[F[_], R] {
-  def get(tag: FixtureTag.Aux[R]): F[R]
-  def initialize: F[Unit]
-  def shutdown: F[Unit]
+sealed trait Fixture[F[_], R] {
+
   def tag: FixtureTag.Aux[R]
+
+  /** A precursor dependency needed to allocate this fixture's resource */
+  type D
+  val resource: D => Resource[F, R]
+
+  /** The dependencies of this fixture along with their specific type. The specific type tags mentioned
+    * may have types that differ from `D` when a `D` value is the result of a function from another dependency */
+  type DTags <: NonEmptyTList
+
+  def dependencies: DTags
+
+}
+
+/** A fixture that has no dependencies and can a root of the dependency DAG */
+sealed trait RootFixture[F[_], R] extends Fixture[F, R] {
+  final type D = Unit
+  final type DTags = D :: TNil
+  final val dependencies: DTags = UnitFixture.tag :: TNil
+
+  protected val resource_ : Resource[F, R]
+  final lazy val resource: D => Resource[F, R] =
+    _ => resource_
 }
 
 object Fixture {
-  def pure[F[_]: Applicative, R](value: R): Fixture[F, R] =
-    new PureFixture[F, R](value)
 
-  def from[F[_]: Monad, R1, R2](dependency: Fixture[F, R1])(
-      f: R1 => Fixture[F, R2]
-  ): Fixture[F, R2] =
-    new FlatMapFixture[F, R1, R2](dependency, f)
+  /**
+    * @tparam F Resource effect type
+    * @tparam R The resource type returned by this fixture
+    * @tparam D0 The runtime value of any precursor dependencies needed by this fixture
+    * @tparam DT0 The tags which locate any precursor fixtures to produce `D0`
+    */
+  type Aux[F[_], R, D0, DT0] = Fixture[F, R] { type D = D0; type DTags = DT0 }
 
+  def pure[F[_]: Applicative, R](value: R)(
+      tagName: String = s"PureFixture($value)"
+  ): Fixture[F, R] =
+    new PureFixture[F, R](value, tagName)
+
+  def from[F[_]: Monad, D, R](name: String, dependency: FixtureTag.Aux[D])(
+      f: D => Resource[F, R]
+  ): Fixture.Aux[F, R, D, D :: TNil] =
+    new FlatMapFixture[F, D, R](name, dependency, f)
+
+  def both[F[_], D1, D2, R](dep1: FixtureTag.Aux[D1], dep2: FixtureTag.Aux[D2])(
+      f: (D1, D2) => Resource[F, R]
+  ): Fixture.Aux[F, R, (D1, D2), D1 :: D2 :: TNil] =
+    new MapNFixture[F, D1, D2, R]()
+
+  def resource[F[_], R](
+      resource: Resource[F, R],
+      tag: FixtureTag.Aux[R]
+  ): Fixture.Aux[F, R, Unit, Unit :: TNil] =
+    new ResourceFixture[F, R](resource, tag)
 }
 
-trait KnownFixture[F[_], R] {
-  def get: Fixture[F, R]
-  def tag: FixtureTag.Aux[R]
-}
-
-object KnownFixture {
-  implicit def knownProduct[F[_]: NonEmptyPar: Functor, R1, R2](
-      implicit k1: KnownFixture[F, R1],
-      k2: KnownFixture[F, R2]
-  ): KnownFixture[F, (R1, R2)] =
-    new KnownFixture[F, (R1, R2)] {
-      def get: Fixture[F, (R1, R2)] = new ProductFixture(k1.get, k2.get)
-
-      def tag: FixtureTag.Aux[(R1, R2)] = ???
-    }
+case class KnownFixture[F[_], R](get: Fixture[F, R]) {
+  val tag: FixtureTag.Aux[R] = get.tag
 }
 
 private[fixture] class ResourceFixture[F[_], R](
-    resource: Resource[F, R],
+    protected val resource_ : Resource[F, R],
     val tag: FixtureTag.Aux[R]
+) extends RootFixture[F, R]
+
+private[fixture] class MapNFixture[F[_]: NonEmptyPar: Functor, D1, D2, R](
+    fix1: FixtureTag.Aux[D1],
+    fix2: FixtureTag.Aux[D2]
+)(
+    f: (D1, D2) => Resource[F, R]
 ) extends Fixture[F, R] {
-  val _ = resource
-  def get(tag: FixtureTag.Aux[R]): F[R] = ???
 
-  def initialize: F[Unit] = ???
+  val resource = (dependency: ((D1, D2))) => f(dependency)
 
-  def shutdown: F[Unit] = ???
+  type DTags = D1 :: D2 :: TNil
 
-}
+  val dependencies: DTags = fix1 :: fix2 :: TNil
 
-private[fixture] class ProductFixture[F[_]: NonEmptyPar: Functor, R1, R2](
-    fix1: Fixture[F, R1],
-    fix2: Fixture[F, R2]
-) extends Fixture[F, (R1, R2)] {
-
-  def get(tag: FixtureTag.Aux[(R1, R2)]): F[(R1, R2)] =
-    (fix1.get(fix1.tag), fix2.get(fix2.tag)).parTupled
-
-  val shutdown: F[Unit] =
-    (fix1.shutdown, fix2.shutdown).parTupled.void
-
-  val tag: FixtureTag.Aux[(R1, R2)] =
-    FixtureTag[(R1, R2)](
-      s"(${fix1.tag}, ${fix2.tag})",
-      fix1.tag.scope min fix2.tag.scope
+  val tag: FixtureTag.Aux[R] =
+    FixtureTag[R](
+      s"ProductFixture(${fix1.name}, ${fix2.name})",
+      fix1.scope min fix2.scope
     )
 
-  val initialize: F[Unit] =
-    (fix1.initialize, fix2.initialize).parTupled.void
+  type D = (D1, D2)
+
 }
 
-private[fixture] class FlatMapFixture[F[_]: Monad, RDep, RGet](
-    dependency: Fixture[F, RDep],
-    f: RDep => Fixture[F, RGet]
+private[fixture] class FlatMapFixture[F[_]: Monad, D0, RGet](
+    name: String,
+    val dependency: FixtureTag.Aux[D0],
+    f: D0 => Resource[F, RGet]
 ) extends Fixture[F, RGet] {
-  def get(tag: FixtureTag.Aux[RGet]): F[RGet] = ???
 
-  def initialize: F[Unit] =
-    // TODO need to cache `rd` and `f(rd)` in a ref/mvar
-    dependency.initialize >>
-      dependency.get(dependency.tag).flatMap(rd => f(rd).initialize)
+  type D = D0
+  type DTags = D0 :: TNil
 
-  def shutdown: F[Unit] = ???
+  def dependencies: DTags = dependency :: TNil
 
-  def tag: FixtureTag.Aux[RGet] = ???
+  val resource = (dependency: D) => f(dependency)
+
+  def tag: FixtureTag.Aux[RGet] =
+    FixtureTag(s"FlatMapFixture($dependency >>= $name)", dependency.scope)
+
 }
 
-private[fixture] class PureFixture[F[_], R](value: R)(
+private[fixture] class PureFixture[F[_], R](value: R, tagName: String)(
     implicit F: Applicative[F]
-) extends Fixture[F, R] {
+) extends RootFixture[F, R] {
+  val tag: FixtureTag.Aux[R] = FixtureTag[R](tagName, FixtureScope.Process)
+  protected val resource_ = Resource.pure[F, R](value)
 
-  def get(tag: FixtureTag.Aux[R]): F[R] = valueF
-
-  private[this] val valueF = F.pure(value)
-
-  val initialize: F[Unit] = F.unit
-
-  val shutdown: F[Unit] = F.unit
-
-  def tag: FixtureTag.Aux[R] =
-    FixtureTag[R](s"PureFixture($value)", FixtureScope.Process)
 }
