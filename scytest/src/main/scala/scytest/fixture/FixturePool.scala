@@ -1,11 +1,11 @@
 package scytest
 package fixture
 
+import cats.data.{OptionT, StateT}
 import cats.effect.concurrent.MVar
 import cats.effect.{Bracket, Clock, Concurrent, Resource, Sync}
 import cats.implicits._
 import cats.{Applicative, ~>}
-import scytest.fixture.FTList._
 import scytest.util.HGraph
 
 import scala.concurrent.duration.MILLISECONDS
@@ -82,6 +82,14 @@ private[scytest] final class BasicPool[F[_]] private (
     extends FixturePool[F] {
   private[this] val types = new BasicPool.Types[F]
   import types._
+  private type ST[A] = StateT[F, TagMap[State], A]
+  private object ST {
+    def get: ST[TagMap[State]] = StateT.get
+    def set(fxs: TagMap[State]): ST[Unit] = StateT.set(fxs)
+    def modify(f: TagMap[State] => TagMap[State]): ST[Unit] = StateT.modify(f)
+    def pure[A](a: A): ST[A] = StateT.pure(a)
+    def liftF[A](fa: F[A]): ST[A] = StateT.liftF(fa)
+  }
 
   private val graph: HGraph.Graph[FixtureTag.Aux] = {
     val b = HGraph.Graph.newBuilder(FTList)
@@ -129,68 +137,88 @@ private[scytest] final class BasicPool[F[_]] private (
   ): F[R] =
     for {
       fxs <- cache.take
-      (updated, leak) <- allocateAll(
-        fxs,
+      (updated, leak) <- allocate(
         getFix(tag),
         suiteId,
         testId
-      )
+      ).run(fxs)
       _ <- cache.put(updated)
     } yield leak.r
 
-  private def allocateAll[R](
-      init: TagMap[State],
-      initFix: Fixture[F, R],
+  private def findLeak[R](
+      tag: FixtureTag.Aux[R],
       suiteId: Suite.Id,
       testId: Test.Id
-  ): F[(TagMap[State], Leak[R])] = {
-    val collectLeaked: FixtureTag.Aux ~> Option =
-      λ[FixtureTag.Aux ~> Option](
-        tag => init.get(tag).get(leakId(suiteId, testId, tag.scope)).map(_.r)
-      )
+  ): OptionT[ST, Leak[R]] =
+    OptionT(ST.get.map(_.get(tag).get(leakId(suiteId, testId, tag.scope))))
 
-    val allocator: RFold[F, TagMap[State]] = new RFold[F, TagMap[State]] {
-      def apply[A](
-          tag: FixtureTag.Aux[A],
-          fxs: TagMap[State]
-      ): F[TagMap[State]] = {
-        val tagLeakId = leakId(suiteId, testId, tag.scope)
-        val state = fxs.get(tag)
-        val resolveDeps: F[TagMap[State]] = state.get(tagLeakId) match {
-          case Some(_) =>
-            fxs.pure[F]
-          case None =>
-            val alloc: F[TagMap[State]] = getFix(tag) match {
-              case rf: RootFixture[F, A] =>
-                Leak
-                  .of(rf.resource_)
-                  .map(leak => fxs.put(tag, state.updated(tagLeakId, leak)))
+  private def allocate[R](
+      fix: Fixture[F, R],
+      suiteId: Suite.Id,
+      testId: Test.Id
+  ): ST[Leak[R]] =
+    findLeak(fix.tag, suiteId, testId)
+      .orElse(allocIfReady(fix, suiteId, testId))
+      .getOrElseF {
+        val node = graph
+          .find(fix.tag)
+          .getOrElse(
+            sys.error("impossible: graph is missing known fixture")
+          )
+        val (roots, _) = graph.focusOnLeaf(node.id).extractRoots
+        val allocateDeps =
+          roots.toList.traverse_ { n =>
+            allocate(getFix(n.label), suiteId, testId).void
+          }
+        allocateDeps >> allocate(fix, suiteId, testId)
+      }
 
-              case fix =>
-                val fixDeps: Option[fix.dependencies.H] =
-                  fix.dependencies.extractRightM(collectLeaked)
-                val allocDeps: F[TagMap[State]] = fixDeps match {
-                  case Some(liveDeps) =>
-                    Leak
-                      .of(fix.resource(liveDeps))
-                      .map(leak => fxs.put(tag, state.updated(tagLeakId, leak)))
-                  case None => ???
-                }
-                allocDeps
-            }
-            alloc
+  /** Allocate `fix` if it isn't already, and all dependencies are ready */
+  private def allocIfReady[R](
+      fix: Fixture[F, R],
+      suiteId: Suite.Id,
+      testId: Test.Id
+  ): OptionT[ST, Leak[R]] = OptionT {
+    val tagLeakId = leakId(suiteId, testId, fix.tag.scope)
+
+    ST.get.flatMap { fxs =>
+      val state = fxs.get(fix.tag)
+
+      def putLeak(leak: Leak[R]) =
+        ST.modify(_.put(fix.tag, state.updated(tagLeakId, leak)))
+
+      OptionT.pure[ST](state.get(tagLeakId)).getOrElseF {
+        fix match {
+          case rf: RootFixture[F, R] =>
+            ST.liftF(Leak.of(rf.resource_))
+              .flatMap(leak => putLeak(leak).as(leak.some))
+          case _ =>
+            val newLeak: F[Option[Leak[R]]] =
+              collectDeps(fxs, fix, suiteId, testId).traverse[F, Leak[R]] {
+                d: fix.dependencies.H =>
+                  Leak.of(fix.resource(d))
+              }
+
+            ST.liftF(newLeak)
+              .flatTap { maybeLeak =>
+                maybeLeak.traverse_(leak => putLeak(leak))
+              }
         }
-        resolveDeps
       }
     }
+  }
 
-    initFix.dependencies
-      .foldRightVM(init)(allocator)
-      .map { fxs =>
-        val leak =
-          fxs.get(initFix.tag)(leakId(suiteId, testId, initFix.tag.scope))
-        (fxs, leak)
-      }
+  private def collectDeps[R](
+      fxs: TagMap[State],
+      fix: Fixture[F, R],
+      suiteId: Suite.Id,
+      testId: Test.Id
+  ): Option[fix.dependencies.H] = {
+    val collectLeaked: FixtureTag.Aux ~> Option =
+      λ[FixtureTag.Aux ~> Option](
+        tag => fxs.get(tag).get(leakId(suiteId, testId, tag.scope)).map(_.r)
+      )
+    fix.dependencies.extractRightM(collectLeaked)
   }
 
   private def leakId(
