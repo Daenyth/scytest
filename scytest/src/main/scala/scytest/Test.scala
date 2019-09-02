@@ -1,18 +1,21 @@
 package scytest
 
 import cats.MonadError
-import scytest.fixture._
-import scytest.fixtures.UnitFixture
+import scytest.fixture.FTList._
 
 trait Test[F[_]] {
-  type R
-  def tag: FixtureTag.Aux[R]
-  def name: String
+  type DTags <: TList
+  val dependencies: DTags
+
+  final type R = dependencies.H
+
+  val name: String
+
   def run(resource: R): F[TestResult]
 }
 
 object Test {
-  type Aux[F[_], R0] = Test[F] { type R = R0 }
+  type Aux[F[_], R0] = Test[F] { type DTags = R0 }
 
   case class Id(value: String)
 
@@ -20,27 +23,30 @@ object Test {
     new FixturelessTest[F](name, F.pure(Verified))
 }
 
-final class FixtureTest[F[_], R0](
+final class FixtureTest[F[_], D <: TList, R0](
     val name: String,
-    val tag: FixtureTag.Aux[R0],
+    val dependencies: D
+)(
     test: R0 => F[Assertion]
 )(
-    implicit F: MonadError[F, Throwable]
+    implicit F: MonadError[F, Throwable],
+    ev: R0 =:= D#H
 ) extends Test[F] {
-  type R = R0
-
+  val _ = ev
+  type DTags = D
   def run(resource: R): F[TestResult] =
-    TestResult.from(name, test(resource))
+    TestResult.from(name, test(resource.asInstanceOf[R0]))
 
 }
 
 final class FixturelessTest[F[_]](val name: String, test: F[Assertion])(
     implicit F: MonadError[F, Throwable]
 ) extends Test[F] {
-  type R = Unit
-  val tag: FixtureTag.Aux[Unit] = UnitFixture.tag
 
-  def run(resource: Unit): F[TestResult] = run_
+  type DTags = TNil
+  val dependencies: DTags = TNil
+
+  def run(resource: R): F[TestResult] = run_
 
   private val run_ = TestResult.from(name, test)
 }

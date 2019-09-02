@@ -5,6 +5,8 @@ import java.util.UUID
 import cats.MonadError
 import scytest.fixture.KnownFixture
 import cats.data.NonEmptyChain
+import scytest.fixture.FTList._
+import shapeless.HNil
 
 abstract class Spec[F[_]](val name: String = getClass.getSimpleName)(
     implicit F: MonadError[F, Throwable]
@@ -18,8 +20,8 @@ abstract class Spec[F[_]](val name: String = getClass.getSimpleName)(
       NonEmptyChain
         .fromSeq(tests.map(t => Test.Id(newId()) -> t))
         .getOrElse(
-          NonEmptyChain.one(
-            Test.Id(newId()) -> Test.pass[F](s"Empty suite $name"))
+          NonEmptyChain
+            .one(Test.Id(newId()) -> Test.pass[F](s"Empty suite $name"))
         )
     )
 
@@ -28,7 +30,9 @@ abstract class Spec[F[_]](val name: String = getClass.getSimpleName)(
 
   protected final def testWith[R](name: String)(body: R => F[Assertion])(
       implicit ev: KnownFixture[F, R]
-  ): Test[F] = new FixtureTest[F, R](name, ev.tag, body)
+  ): Test[F] =
+    new FixtureTest(name, ev.tag ::: TNil)((r: shapeless.::[R, HNil]) =>
+      body(r.head))
 
   protected final implicit def pureAssertion(
       assertion: Assertion

@@ -2,15 +2,17 @@ package scytest
 package fixture
 
 import cats.effect.concurrent.MVar
-import cats.effect.{Clock, Concurrent, Sync}
+import cats.effect.{Bracket, Clock, Concurrent, Resource, Sync}
 import cats.implicits._
 import cats.{Applicative, ~>}
 import scytest.fixture.FTList._
-import scytest.fixtures.UnitFixture
+import scytest.fixture.FixtureTag.Aux
 
 import scala.concurrent.duration.MILLISECONDS
 
 private[scytest] trait FixturePool[F[_]] {
+
+  def closeProcess(tag: FixtureTag): F[Unit]
 
   def closeSuite(
       tag: FixtureTag,
@@ -20,7 +22,7 @@ private[scytest] trait FixturePool[F[_]] {
 
   /** Closes any fixtures that were opened for `testId` in `suiteId` if those fixtures are eligible to be closed at `closingScope` */
   def closeTest(
-      tag: FixtureTag,
+      tags: FixtureTag,
       closingScope: FixtureScope,
       suiteId: Suite.Id,
       testId: Test.Id
@@ -38,6 +40,8 @@ private[scytest] trait FixturePool[F[_]] {
 private[scytest] class LoggingPool[F[_]: Sync: Clock](
     base: FixturePool[F]
 ) extends FixturePool[F] {
+  def closeProcess(tag: FixtureTag): F[Unit] =
+    log(s"closeProcess $tag") >> base.closeProcess(tag)
 
   def closeSuite(
       tag: FixtureTag,
@@ -71,15 +75,18 @@ private[scytest] class LoggingPool[F[_]: Sync: Clock](
 }
 
 // NB unsafe to cancel operations of this class, will likely leak resources
-private[scytest] class BasicPool[F[_]] private (types: BasicPool.Types[F])(
+private[scytest] class BasicPool[F[_]] private (
     knownFixtures: TagMap[KnownFixture[F, ?]],
-    cache: MVar[F, TagMap[types.State]]
+    cache: MVar[F, TagMap[BasicPool.State[F, ?]]]
 )(implicit F: Concurrent[F])
     extends FixturePool[F] {
+  private[this] val types = new BasicPool.Types[F]
   import types._
 
   private def getFix[T <: FixtureTag](tag: T): Fixture[F, tag.R] =
     knownFixtures.get[tag.R](tag).get
+
+  def closeProcess(tag: FixtureTag): F[Unit] = ???
 
   def closeSuite(
       tag: FixtureTag,
@@ -93,12 +100,35 @@ private[scytest] class BasicPool[F[_]] private (types: BasicPool.Types[F])(
       suiteId: Suite.Id,
       testId: Test.Id
   ): F[Unit] = {
-    val deps: List[FixtureTag] = tag :: getFix(tag).dependencies.existentially
+    val fix = getFix(tag)
+    val deps = :::(fix.tag, fix.dependencies)
     val leakIds = deps
+      .foldLeftVM(())(new LFold[F, Unit] {
+        def apply[A](b: Unit, va: FixtureTag.Aux[A]): F[Unit] =
+          if (va.scope != closingScope) F.unit
+          else {
+
+            val id = leakId(suiteId, testId, va.scope)
+
+          }
+
+      })
       .filter(_.scope == closingScope)
       .map(t => leakId(suiteId, testId, t.scope))
     // Need to close in the right order for test->test dependency management
     ???
+  }
+
+  private def close[R](
+      fxs: TagMap[State],
+      tag: FixtureTag.Aux[R],
+      id: LeakId
+  ): F[TagMap[State]] = {
+    val state = fxs.get(tag)
+    state.get(id) match {
+      case Some(leak) => leak.close.as(fxs.put(tag, state - id))
+      case None       => fxs.pure[F]
+    }
   }
 
   def get[R](
@@ -106,30 +136,70 @@ private[scytest] class BasicPool[F[_]] private (types: BasicPool.Types[F])(
       testId: Test.Id,
       tag: FixtureTag.Aux[R]
   ): F[R] =
-    cache.take.flatMap { fxs =>
-      allocateAll(
+    for {
+      fxs <- cache.take
+      (updated, leak) <- allocateAll(
         fxs,
         getFix(tag),
         suiteId,
         testId
-      ).flatMap(cache.put)
-    } >> cache.read.map { fxs =>
-      fxs.get(tag)(leakId(suiteId, testId, tag.scope)).r
-    }
+      )
+      _ <- cache.put(updated)
+    } yield leak.r
 
   private def allocateAll[R](
       init: TagMap[State],
-      fix: Fixture[F, R],
+      initFix: Fixture[F, R],
       suiteId: Suite.Id,
       testId: Test.Id
-  ): F[TagMap[State]] = {
-    val visitor = new RVisitor[F, TagMap[State]] {
+  ): F[(TagMap[State], Leak[R])] = {
+    val collectLeaked: FixtureTag.Aux ~> Option =
+      λ[FixtureTag.Aux ~> Option](
+        tag => init.get(tag).get(leakId(suiteId, testId, tag.scope)).map(_.r)
+      )
+
+    val allocator: RFold[F, TagMap[State]] = new RFold[F, TagMap[State]] {
       def apply[A](
-          tagA: FixtureTag.Aux[A],
+          tag: FixtureTag.Aux[A],
           fxs: TagMap[State]
-      ): F[TagMap[State]] = ???
+      ): F[TagMap[State]] = {
+        val tagLeakId = leakId(suiteId, testId, tag.scope)
+        val state = fxs.get(tag)
+        val resolveDeps: F[TagMap[State]] = state.get(tagLeakId) match {
+          case Some(_) =>
+            fxs.pure[F]
+          case None =>
+            val alloc: F[TagMap[State]] = getFix(tag) match {
+              case rf: RootFixture[F, A] =>
+                Leak
+                  .of(rf.resource_)
+                  .map(leak => fxs.put(tag, state.updated(tagLeakId, leak)))
+
+              case fix =>
+                val fixDeps: Option[fix.dependencies.H] =
+                  fix.dependencies.extractRightM(collectLeaked)
+                val allocDeps: F[TagMap[State]] = fixDeps match {
+                  case Some(liveDeps) =>
+                    Leak
+                      .of(fix.resource(liveDeps))
+                      .map(leak => fxs.put(tag, state.updated(tagLeakId, leak)))
+                  case None => ???
+                }
+                allocDeps
+            }
+            alloc
+        }
+        resolveDeps
+      }
     }
-    fix.dependencies.foldRightVM(init)(visitor)
+
+    initFix.dependencies
+      .foldRightVM(init)(allocator)
+      .map { fxs =>
+        val leak =
+          fxs.get(initFix.tag)(leakId(suiteId, testId, initFix.tag.scope))
+        (fxs, leak)
+      }
   }
 
   private def leakId(
@@ -148,36 +218,46 @@ object BasicPool {
   def create[F[_]: Concurrent](
       fixtures: TagMap[KnownFixture[F, ?]]
   ): F[BasicPool[F]] = {
-    val types = new Types[F]
-    import types._
+    val t = new Types[F]
+    import t._
 
     type E1[A] = TagMap.Entry.Aux[KnownFixture[F, ?], A]
-    type E2[A] = TagMap.Entry.Aux[State, A]
+    type E2[A] = TagMap.Entry.Aux[t.State, A]
     for {
       cache <- MVar[F].of(
         fixtures
-          .mapE[State](
+          .mapE[t.State](
             new (E1 ~> E2) {
               def apply[R](fa: E1[R]): E2[R] = fa.map(_ => State.initial[R])
             }
           )
-          .put(UnitFixture.tag, State.unit) // Need to seed with unit as an open fixture to allow launching any dependent on it
       )
-    } yield new BasicPool[F](types)(fixtures, cache)
+    } yield new BasicPool[F](fixtures, cache)
+  }
+
+  private[fixture] type State[F[_], R] = Map[LeakId, Leak[F, R]]
+
+  /** An allocated resource that needs to be finalized at some point */
+  private[fixture] case class Leak[F[_], R](r: R, close: F[Unit])
+
+  object Leak {
+    def of[F[_], R](
+        resource: Resource[F, R]
+    )(implicit F: Bracket[F, Throwable]): F[Leak[F, R]] =
+      resource.allocated.map(t => Leak(t._1, t._2))
   }
 
   private class Types[F[_]: Applicative] {
+    type State[R] = BasicPool.State[F, R]
+    type Leak[R] = BasicPool.Leak[F, R]
+    val Leak = BasicPool.Leak
 
-    type State[R] = Map[LeakId, Leak[R]]
     object State {
       def initial[R]: State[R] = Map.empty
       val unit: State[Unit] = Map(
         LeakId.ProcessId -> Leak((), Applicative[F].unit)
       )
     }
-
-    /** An allocated resource that needs to be finalized at some point */
-    case class Leak[R](r: R, close: F[Unit])
 
   }
 }
