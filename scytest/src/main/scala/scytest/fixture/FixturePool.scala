@@ -6,7 +6,8 @@ import cats.effect.concurrent.MVar
 import cats.effect.{Bracket, Clock, Concurrent, Resource, Sync}
 import cats.implicits._
 import cats.{Applicative, ~>}
-import scytest.util.HGraph
+import scytest.util.{HGraph, TagMap}
+import fs2.Stream
 
 import scala.concurrent.duration.MILLISECONDS
 
@@ -65,6 +66,8 @@ private[scytest] final class BasicPool[F[_]] private (
   private type ST[A] = StateT[F, TagMap[State], A]
   private object ST {
     def get: ST[TagMap[State]] = StateT.get
+    def inspect[B](f: TagMap[State] => B): ST[B] = StateT.inspect(f)
+    def inspectF[B](f: TagMap[State] => F[B]): ST[B] = StateT.inspectF(f)
     def modify(f: TagMap[State] => TagMap[State]): ST[Unit] = StateT.modify(f)
     def liftF[A](fa: F[A]): ST[A] = StateT.liftF(fa)
   }
@@ -82,13 +85,27 @@ private[scytest] final class BasicPool[F[_]] private (
     knownFixtures.get[tag.R](tag).get
 
   def closeAll: F[Unit] =
-    ???
+    closeLeak(LeakId.ProcessId)
 
   def closeSuite(suiteId: Suite.Id): F[Unit] =
-    ???
+    closeLeak(LeakId.SuiteId(suiteId))
 
   def closeTest(testId: Test.Id): F[Unit] =
-    ???
+    closeLeak(LeakId.TestId(testId))
+
+  private def closeLeak(leakId: LeakId): F[Unit] = withCache {
+    ST.get.flatMap { fxs =>
+      val leaks: Map[FixtureTag, Leak[_]] =
+        fxs.collectValues[Leak[_]](state => state.get(leakId)).toMap
+
+      graph.unfoldLeafs
+        .flatMap(ns => Stream.emits(ns.toSeq))
+        .collect { case n if leaks.contains(n.label) => n.label.erase }
+        .evalMap(tag => close(tag, leakId, leaks(tag)))
+        .compile
+        .drain
+    }
+  }
 
   // TODO explore STM instead of MVar in order to lock less
   private def withCache[A](f: ST[A]): F[A] =
@@ -98,14 +115,9 @@ private[scytest] final class BasicPool[F[_]] private (
       _ <- cache.put(updated)
     } yield result
 
-  private def close[R](tag: FixtureTag.Aux[R], id: LeakId): ST[Unit] =
-    findLeak[R](tag, id)
-      .flatMap { leak =>
-        val update = ST.liftF(leak.close) >> ST.modify(_.modify[R](tag)(_ - id))
-        OptionT.liftF(update)
-      }
-      .value
-      .void
+  private def close(tag: FixtureTag, id: LeakId, leak: Leak[_]): ST[Unit] =
+    ST.liftF(leak.close) >>
+      ST.modify(_.modify[tag.R](tag)(_ - id))
 
   def get[R](
       suiteId: Suite.Id,
@@ -124,7 +136,7 @@ private[scytest] final class BasicPool[F[_]] private (
       tag: FixtureTag.Aux[R],
       leakId: LeakId
   ): OptionT[ST, Leak[R]] =
-    OptionT(ST.get.map(_.get(tag).get(leakId)))
+    OptionT(ST.inspect(_.get(tag).get(leakId)))
 
   private def allocate[R](
       fix: Fixture[F, R],
@@ -254,75 +266,10 @@ object BasicPool {
   }
 }
 
-sealed abstract class LeakId(val scope: FixtureScope)
-object LeakId {
+private[fixture] sealed abstract class LeakId(val scope: FixtureScope)
+private[fixture] object LeakId {
 
   case class TestId(id: Test.Id) extends LeakId(FixtureScope.Test)
   case class SuiteId(id: Suite.Id) extends LeakId(FixtureScope.Suite)
   case object ProcessId extends LeakId(FixtureScope.Process)
-}
-
-private[scytest] class TagMap[V[_]] private[TagMap] (
-    private val map: Map[FixtureTag, TagMap.Entry[V]]
-) {
-  import TagMap.Entry
-
-  def get[T](key: FixtureTag.Aux[T]): V[T] =
-    map(key).value.asInstanceOf[V[T]]
-
-  def getSome(key: FixtureTag): V[_] =
-    map(key).value
-
-  def put[T](key: FixtureTag.Aux[T], value: V[T]): TagMap[V] =
-    new TagMap[V](map.updated[Entry[V]](key, Entry(key, value)))
-
-  def modify[T](key: FixtureTag.Aux[T])(f: V[T] => V[T]): TagMap[V] =
-    put(key, f(get(key)))
-
-  def mapE[V2[_]](
-      f: Entry.Aux[V, ?] ~> Entry.Aux[V2, ?]
-  ): TagMap[V2] = {
-    val newMap: Map[FixtureTag, Entry[V2]] =
-      map.map {
-        case (k, e) =>
-          k -> f.apply[e.A](e).asInstanceOf[Entry[V2]]
-      }
-    new TagMap[V2](newMap)
-  }
-
-  def ++(other: TagMap[V]): TagMap[V] =
-    new TagMap[V](map ++ other.map)
-
-  def keys: Set[FixtureTag] = map.keySet
-}
-
-private[scytest] object TagMap {
-  def empty[V[_]] = new TagMap[V](Map.empty[FixtureTag, Entry[V]])
-  def of[V[_]](items: Entry[V]*): TagMap[V] =
-    items.foldLeft(empty[V])((tm, e) => tm.put(e.key, e.value))
-
-  trait Entry[V[_]] {
-    type A
-    def key: FixtureTag.Aux[A]
-    def value: V[A]
-
-    def map[V2[_]](f: V[A] => V2[A]): Entry.Aux[V2, A]
-  }
-  object Entry {
-    def apply[V[_], A](key: FixtureTag.Aux[A], value: V[A]): Entry.Aux[V, A] =
-      new Impl(key, value)
-
-    implicit def fromTuple[V[_], A](kv: (FixtureTag.Aux[A], V[A])): Entry[V] =
-      new Impl(kv._1, kv._2)
-
-    type Aux[V[_], A0] = Entry[V] { type A = A0 }
-    private class Impl[V[_], A0](
-        val key: FixtureTag.Aux[A0],
-        val value: V[A0]
-    ) extends Entry[V] {
-      type A = A0
-
-      def map[V2[_]](f: V[A] => V2[A]): Aux[V2, A0] = Entry(key, f(value))
-    }
-  }
 }

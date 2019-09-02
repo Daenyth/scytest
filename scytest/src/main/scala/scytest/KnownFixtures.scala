@@ -1,7 +1,8 @@
 package scytest
 
 import cats.Applicative
-import scytest.fixture.{KnownFixture, TagMap}
+import scytest.fixture.KnownFixture
+import scytest.util.TagMap
 
 abstract class KnownFixtures[F[_]: Applicative] {
   // Subclass with `super.all ++ TagMap.of(..more..)` to add custom fixtures not in scytest

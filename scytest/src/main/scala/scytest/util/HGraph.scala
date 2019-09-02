@@ -2,7 +2,7 @@ package scytest.util
 
 import cats._
 import cats.implicits._
-import fs2.Stream
+import fs2.{Pure, Stream}
 
 private[scytest] object HGraph {
 
@@ -130,6 +130,14 @@ private[scytest] object HGraph {
       }
       new Graph(newNodes, edges, reverseEdges)
     }
+
+    /** Unfold of `extractLeafs`, "peeling" back one layer of leafs
+      *  at a time and producing them in order, until all nodes have been emitted */
+    val unfoldLeafs: Stream[Pure, Set[Node[V]]] =
+      Stream.unfold(this) { g =>
+        if (g.isEmpty) None
+        else Some(g.extractLeafs)
+      }
 
     /** Remove all root nodes, producing a new graph without those nodes, and with edges directed to those removed */
     lazy val extractRoots: (Set[Node[V]], Graph[V]) = {

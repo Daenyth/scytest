@@ -3,7 +3,8 @@ package scytest
 import cats.data.{Chain, NonEmptyChain}
 import cats.effect.{ContextShift, ExitCode, IO, IOApp, Timer}
 import cats.implicits._
-import scytest.fixture.{BasicPool, KnownFixture, LoggingPool, TagMap}
+import scytest.fixture.{BasicPool, KnownFixture, LoggingPool}
+import scytest.util.TagMap
 
 object Main extends IOApp {
   def run(args: List[String]): IO[ExitCode] = {
