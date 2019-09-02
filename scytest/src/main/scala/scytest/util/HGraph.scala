@@ -2,10 +2,9 @@ package scytest.util
 
 import cats._
 import cats.implicits._
-
 import fs2.Stream
 
-object HGraph {
+private[scytest] object HGraph {
 
   /**
     * A Graph which is:
@@ -49,6 +48,37 @@ object HGraph {
           re.updated(id, re(id) + node.id)
         }
       )
+    }
+
+    def find[L](label: V[L]): Option[Node.Of[V, L]] =
+      nodes
+        .find(kv => kv._2.label == label)
+        .map(kv => kv._2.asInstanceOf[Node.Of[V, L]])
+
+    /** A subset of this graph where the only leaf node is `nodeId`, and all other
+      *  nodes are either direct or indirect roots of that node
+      *
+      *  @return Empty graph if nodeId is not present, otherwise the subset
+      */
+    def focusOnLeaf(nodeId: NodeId): Graph[V] = {
+      if (!nodes.contains(nodeId)) return Graph.empty[V]
+
+      var included = Set(nodeId)
+      var toFind: Set[NodeId] = Set(nodeId)
+      while (toFind.nonEmpty) {
+        val next = toFind.head
+        toFind = toFind - next
+
+        val nextEdges = edges(next)
+        toFind = toFind ++ (nextEdges -- included)
+        included = included ++ nextEdges
+      }
+
+      val newNodes = nodes.filterKeys(included.contains)
+      val newEdges = edges.filterKeys(included.contains)
+      val newRevEdges = reverseEdges.filterKeys(included.contains)
+
+      new Graph[V](newNodes, newEdges, newRevEdges) // TODO test (focus + extractLeafs) -> Set(nodeId)
     }
 
     def isEmpty: Boolean = nodes.isEmpty
@@ -132,11 +162,44 @@ object HGraph {
         edges = g.reverseEdges,
         reverseEdges = g.edges
       ) {
-    override val reverseDirection: Graph[V] = g
+    override lazy val reverseDirection: Graph[V] = g
   }
 
   object Graph {
     def empty[V[_]]: Graph[V] = new Graph[V](Map.empty, Map.empty, Map.empty)
+    private type EdgeMap = Map[NodeId, Set[NodeId]]
+
+    def newBuilder[V[_]](tl: TypeAnd[V]): Builder[V] =
+      new Builder[V](tl, Map.empty, Map.empty, Map.empty)
+
+    class Builder[V[_]] private[Graph] (
+        tl: TypeAnd[V],
+        var nodes: Map[NodeId, Node[V]],
+        var edges: EdgeMap,
+        var reverseEdges: EdgeMap
+    ) {
+      def add[L](label: V[L], edges: TypeAnd[V]#TList): Unit = {
+        val node = Node(label, NodeId(label))
+        this.nodes = nodes.updated(node.id, node)
+        this.edges = edges
+          .asInstanceOf[tl.TList]
+          .foldLeft(this.edges)(new tl.LFold[Id, EdgeMap] {
+            def apply[A](b: EdgeMap, va: V[A]): EdgeMap =
+              b.updated(node.id, b.getOrElse(node.id, Set.empty) + NodeId(va))
+          })
+        reverseEdges = edges
+          .asInstanceOf[tl.TList]
+          .foldLeft(reverseEdges)(new tl.LFold[Id, EdgeMap] {
+            def apply[A](b: EdgeMap, va: V[A]): EdgeMap = {
+              val vaId = NodeId(va)
+              b.updated(vaId, b.getOrElse(vaId, Set.empty) + node.id)
+            }
+          })
+      }
+
+      // TODO assert cycles fail to build
+      def build(): Graph[V] = new Graph[V](nodes, edges, reverseEdges)
+    }
   }
 
   /** forall [L], `V[L] => F[G[L]]` */
@@ -172,6 +235,24 @@ object HGraph {
     type L = L0
   }
 
-  class NodeId
+  sealed trait NodeId
+
+  object NodeId {
+    // Unsafe / relies on universal equals/hashcode
+    private[HGraph] def apply[T](t: T): NodeId = new NodeIdRef(t)
+  }
+
+  private class NodeIdRef[T](private val t: T) extends NodeId {
+
+    override def toString: String = s"NodeId($t)"
+
+    override def equals(obj: Any): Boolean = obj match {
+      case other: NodeIdRef[_] =>
+        t == other.t
+      case _ => false
+    }
+
+    override def hashCode(): Int = t.hashCode()
+  }
 
 }

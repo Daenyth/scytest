@@ -1,5 +1,6 @@
 package scytest.fixture
 
+import cats.kernel.Hash
 import scytest.util.TypeAnd
 
 sealed abstract class FixtureTag private[fixture] (
@@ -41,6 +42,10 @@ object FixtureTag {
     new FixtureTag(name, scope) {
       type R = R0
     }
+
+  private val hashInstance = Hash.fromUniversalHashCode[FixtureTag]
+  implicit def fixtureTagInstance[T <: FixtureTag]: Hash[T] =
+    hashInstance.asInstanceOf[Hash[T]]
 
 }
 

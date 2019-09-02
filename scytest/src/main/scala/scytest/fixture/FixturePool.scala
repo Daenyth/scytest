@@ -6,7 +6,7 @@ import cats.effect.{Bracket, Clock, Concurrent, Resource, Sync}
 import cats.implicits._
 import cats.{Applicative, ~>}
 import scytest.fixture.FTList._
-import scytest.fixture.FixtureTag.Aux
+import scytest.util.HGraph
 
 import scala.concurrent.duration.MILLISECONDS
 
@@ -75,13 +75,22 @@ private[scytest] class LoggingPool[F[_]: Sync: Clock](
 }
 
 // NB unsafe to cancel operations of this class, will likely leak resources
-private[scytest] class BasicPool[F[_]] private (
+private[scytest] final class BasicPool[F[_]] private (
     knownFixtures: TagMap[KnownFixture[F, ?]],
     cache: MVar[F, TagMap[BasicPool.State[F, ?]]]
 )(implicit F: Concurrent[F])
     extends FixturePool[F] {
   private[this] val types = new BasicPool.Types[F]
   import types._
+
+  private val graph: HGraph.Graph[FixtureTag.Aux] = {
+    val b = HGraph.Graph.newBuilder(FTList)
+    knownFixtures.keys.toList.foreach { t =>
+      val fix = getFix(t)
+      b.add(fix.tag, fix.dependencies)
+    }
+    b.build()
+  }
 
   private def getFix[T <: FixtureTag](tag: T): Fixture[F, tag.R] =
     knownFixtures.get[tag.R](tag).get
@@ -99,25 +108,7 @@ private[scytest] class BasicPool[F[_]] private (
       closingScope: FixtureScope,
       suiteId: Suite.Id,
       testId: Test.Id
-  ): F[Unit] = {
-    val fix = getFix(tag)
-    val deps = :::(fix.tag, fix.dependencies)
-    val leakIds = deps
-      .foldLeftVM(())(new LFold[F, Unit] {
-        def apply[A](b: Unit, va: FixtureTag.Aux[A]): F[Unit] =
-          if (va.scope != closingScope) F.unit
-          else {
-
-            val id = leakId(suiteId, testId, va.scope)
-
-          }
-
-      })
-      .filter(_.scope == closingScope)
-      .map(t => leakId(suiteId, testId, t.scope))
-    // Need to close in the right order for test->test dependency management
-    ???
-  }
+  ): F[Unit] = ???
 
   private def close[R](
       fxs: TagMap[State],

@@ -1,6 +1,6 @@
 package scytest.util
 
-import cats.{Monad, ~>}
+import cats.{Id, Monad, ~>}
 import cats.implicits._
 import shapeless.{::, HList, HNil}
 
@@ -35,9 +35,12 @@ class TypeAnd[V[_]] { TA =>
     /** right monadic fold (starting at the tail) given a function `forall [A], (V[A], B) => F[B]` */
     def foldRightVM[F[_]: Monad, B](init: B)(f: RFold[F, B]): F[B]
 
+    def foldRight[B](init: B)(f: RFold[Id, B]): B = foldRightVM(init)(f)
+
     /** left monadic fold (starting at the head) given a function `forall [A], (B, V[A]) => F[B]` */
     def foldLeftVM[F[_]: Monad, B](init: B)(f: LFold[F, B]): F[B]
 
+    def foldLeft[B](init: B)(f: LFold[Id, B]): B = foldLeftVM(init)(f)
   }
   // A type tag proving that this `TList` is not `TNil`
   sealed trait NonEmptyTList extends TList
