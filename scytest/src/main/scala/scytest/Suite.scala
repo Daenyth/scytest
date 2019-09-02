@@ -14,7 +14,9 @@ sealed trait Suite[F[_]] {
 }
 
 object Suite {
-  case class Id(value: String)
+  case class Id(value: String) {
+    override def toString: String = s"Suite.Id($value)"
+  }
   implicit def suiteSemigroup[F[_]]: CommutativeSemigroup[Suite[F]] =
     _.combine(_)
 }

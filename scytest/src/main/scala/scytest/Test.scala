@@ -17,7 +17,9 @@ trait Test[F[_]] {
 object Test {
   type Aux[F[_], R0] = Test[F] { type DTags = R0 }
 
-  case class Id(value: String)
+  case class Id(value: String) {
+    override def toString: String = s"Test.Id($value)"
+  }
 
   def pass[F[_]](name: String)(implicit F: MonadError[F, Throwable]) =
     new FixturelessTest[F](name, F.pure(Verified))

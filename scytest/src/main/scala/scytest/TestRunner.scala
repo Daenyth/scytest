@@ -7,6 +7,7 @@ import cats.~>
 import fs2.Stream
 import scytest.fixture.{FixturePool, FixtureTag}
 
+// TODO trace/span etc
 class TestRunner[F[_]: Concurrent: ContextShift: Timer](
     pool: FixturePool[F]
 ) {
