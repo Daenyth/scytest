@@ -1,7 +1,6 @@
 package scytest.fixture
 
 import cats.kernel.Hash
-import scytest.util.TypeAnd
 
 sealed abstract class FixtureTag private[fixture] (
     val name: String,
@@ -48,5 +47,3 @@ object FixtureTag {
     hashInstance.asInstanceOf[Hash[T]]
 
 }
-
-object FTList extends TypeAnd[FixtureTag.Aux]

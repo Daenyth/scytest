@@ -3,9 +3,8 @@ package scytest.fixture
 import cats.effect.Resource
 import cats.implicits._
 import cats.{Applicative, Monad}
-import scytest.fixture.FTList._
-
-import shapeless.{HNil, ::}
+import scytest.util.TagList._
+import shapeless.{::, HNil}
 
 sealed abstract class Fixture[F[_], R] {
 

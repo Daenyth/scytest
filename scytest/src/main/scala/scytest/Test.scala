@@ -2,8 +2,8 @@ package scytest
 
 import cats.MonadError
 import cats.data.Chain
-import scytest.fixture.FTList._
 import scytest.fixture.Fixture
+import scytest.util.TagList._
 
 trait Test[F[_]] {
   type DTags <: TList

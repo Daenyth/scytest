@@ -74,8 +74,8 @@ private[scytest] final class BasicPool[F[_]] private (
     def liftF[A](fa: F[A]): ST[A] = StateT.liftF(fa)
   }
 
-  private val graph: HGraph.Graph[FixtureTag.Aux] = {
-    val b = HGraph.Graph.newBuilder(FTList)
+  private val graph: HGraph.Graph = {
+    val b = HGraph.Graph.newBuilder()
     knownFixtures.keys.toList.foreach { t =>
       val fix = getFix(t)
       b.add(fix.tag, fix.dependencies)
