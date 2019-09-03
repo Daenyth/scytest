@@ -48,13 +48,12 @@ private[scytest] object HGraph {
       if (memoLeafFocus.contains(nodeId)) memoLeafFocus(nodeId)
       else
         memoLeafFocus.synchronized {
-          println(s"BUILDING FOCUS $nodeId")
           val built = buildLeafFocus(nodeId)
           memoLeafFocus(nodeId) = built
           built
         }
 
-    private def buildLeafFocus(nodeId: NodeId): Graph = {
+    private[this] def buildLeafFocus(nodeId: NodeId): Graph = {
       if (!nodes.contains(nodeId)) return Graph.empty
 
       var included = Set(nodeId)
@@ -102,7 +101,6 @@ private[scytest] object HGraph {
 
     /** Remove all leaf nodes, producing a new graph without those nodes, and with their edges removed */
     lazy val extractLeafs: (Set[Node], Graph) = {
-      println(s"EXTRACT $this")
       val leafIds = reverseEdges.collect { case (k, v) if v.isEmpty => k }.toSet
       val (leafs, nonLeafs) = nodes.partition(kv => leafIds.contains(kv._1))
 
