@@ -36,10 +36,12 @@ private[scytest] class LoggingPool[F[_]: Sync: Clock](
   val closeAll: F[Unit] = log(s"closeAll") >> base.closeAll
 
   def closeSuite(suiteId: Suite.Id): F[Unit] =
-    log(s"close $suiteId") >> base.closeSuite(suiteId)
+    log(s"closing $suiteId") >> base.closeSuite(suiteId) >> log(
+      s"closed $suiteId"
+    )
 
   def closeTest(testId: Test.Id): F[Unit] =
-    log(s"close $testId") >> base.closeTest(testId)
+    log(s"close $testId") >> base.closeTest(testId) >> log(s"closed $testId")
 
   override def get[R](
       suiteId: Suite.Id,
@@ -57,7 +59,7 @@ private[scytest] class LoggingPool[F[_]: Sync: Clock](
 
 // NB unsafe to cancel operations of this class, will likely leak resources. Probably OK since it's private
 private[scytest] final class BasicPool[F[_]] private (
-    knownFixtures: TagMap[KnownFixture[F, ?]],
+    knownFixtures: TagMap[Fixture[F, ?]],
     cache: MVar[F, TagMap[BasicPool.State[F, ?]]]
 )(implicit F: Concurrent[F])
     extends FixturePool[F] {
@@ -82,7 +84,7 @@ private[scytest] final class BasicPool[F[_]] private (
   }
 
   private def getFix[T <: FixtureTag](tag: T): Fixture[F, tag.R] =
-    knownFixtures.get[tag.R](tag).get
+    knownFixtures.get[tag.R](tag)
 
   def closeAll: F[Unit] =
     closeLeak(LeakId.ProcessId)
@@ -164,32 +166,33 @@ private[scytest] final class BasicPool[F[_]] private (
       fix: Fixture[F, R],
       suiteId: Suite.Id,
       testId: Test.Id
-  ): OptionT[ST, Leak[R]] = OptionT {
-    val tagLeakId = leakId(suiteId, testId, fix.tag.scope)
+  ): OptionT[ST, Leak[R]] = {
+    val tag = fix.tag
+    val tagLeakId = leakId(suiteId, testId, tag.scope)
 
-    ST.get.flatMap { fxs =>
-      val state = fxs.get(fix.tag)
+    def putLeak(leak: Leak[R]) =
+      ST.modify { fxs =>
+        fxs.put(tag, fxs.get(tag).updated(tagLeakId, leak))
+      }
 
-      def putLeak(leak: Leak[R]) =
-        ST.modify(_.put(fix.tag, state.updated(tagLeakId, leak)))
+    findLeak(tag, tagLeakId).orElseF {
+      fix match {
+        case rf: RootFixture[F, R] =>
+          ST.liftF(Leak.of(rf.resource_))
+            .flatMap(leak => putLeak(leak).as(leak.some))
 
-      OptionT.pure[ST](state.get(tagLeakId)).getOrElseF {
-        fix match {
-          case rf: RootFixture[F, R] =>
-            ST.liftF(Leak.of(rf.resource_))
-              .flatMap(leak => putLeak(leak).as(leak.some))
-          case _ =>
-            val newLeak: F[Option[Leak[R]]] =
-              collectDeps(fxs, fix, suiteId, testId).traverse[F, Leak[R]] {
-                d: fix.dependencies.H =>
+        case _ =>
+          val newLeak: ST[Option[Leak[R]]] =
+            ST.inspectF { fxs =>
+              collectDeps(fxs, fix, suiteId, testId)
+                .traverse[F, Leak[R]] { d =>
                   Leak.of(fix.resource(d))
-              }
+                }
+            }
 
-            ST.liftF(newLeak)
-              .flatTap { maybeLeak =>
-                maybeLeak.traverse_(leak => putLeak(leak))
-              }
-        }
+          newLeak.flatTap { maybeLeak =>
+            maybeLeak.traverse_(leak => putLeak(leak))
+          }
       }
     }
   }
@@ -221,12 +224,12 @@ private[scytest] final class BasicPool[F[_]] private (
 object BasicPool {
 
   def create[F[_]: Concurrent](
-      fixtures: TagMap[KnownFixture[F, ?]]
+      fixtures: TagMap[Fixture[F, ?]]
   ): F[BasicPool[F]] = {
     val t = new Types[F]
     import t._
 
-    type E1[A] = TagMap.Entry.Aux[KnownFixture[F, ?], A]
+    type E1[A] = TagMap.Entry.Aux[Fixture[F, ?], A]
     type E2[A] = TagMap.Entry.Aux[t.State, A]
     for {
       cache <- MVar[F].of(

@@ -3,7 +3,7 @@ package scytest
 import cats.data.{Chain, NonEmptyChain}
 import cats.effect.{Clock, ContextShift, ExitCode, IO, IOApp, Timer}
 import cats.implicits._
-import scytest.fixture.{BasicPool, KnownFixture, LoggingPool}
+import scytest.fixture.{BasicPool, Fixture, LoggingPool}
 import scytest.util.TagMap
 
 import scala.concurrent.duration.MILLISECONDS
@@ -11,22 +11,23 @@ import scala.concurrent.duration.MILLISECONDS
 object Main extends IOApp {
   def run(args: List[String]): IO[ExitCode] = {
     val specs = Chain(
-      new BasicSpec
+      new BasicSpec,
+      new FixtureSpec
     )
 
-    val kfs = new KnownFixtures[IO] {}
-
-    new Main(specs, kfs.all).run.as(ExitCode.Success)
+    new Main(specs).run.as(ExitCode.Success)
   }
 }
 
 class Main(
-    specs: Chain[BasicSpec],
-    fixtures: TagMap[KnownFixture[IO, ?]]
+    specs: Chain[Spec[IO]]
 )(implicit cs: ContextShift[IO], timer: Timer[IO]) {
 
   val suite: Suite[IO] =
     NonEmptyChain.fromChainUnsafe(specs).map[Suite[IO]](_.toSuite).reduce
+
+  val fixtures: TagMap[Fixture[IO, ?]] =
+    TagMap.fromChain(suite.fixtures.map(fix => fix.tag -> fix))
 
   val run: IO[Unit] = {
     BasicPool.create[IO](fixtures).flatMap { pool =>
@@ -38,7 +39,7 @@ class Main(
           log(tr.toString)
         }
         .compile
-        .drain
+        .drain >> log("Finished")
     }
   }
 

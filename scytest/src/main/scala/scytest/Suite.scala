@@ -1,8 +1,9 @@
 package scytest
 
-import cats.data.NonEmptyChain
+import cats.data.{Chain, NonEmptyChain}
 import cats.implicits._
 import cats.kernel.CommutativeSemigroup
+import scytest.fixture.Fixture
 
 sealed trait Suite[F[_]] {
 
@@ -11,6 +12,8 @@ sealed trait Suite[F[_]] {
   def combine(other: Suite[F]): Suite[F]
 
   def collected: Collected[F]
+
+  lazy val fixtures: Chain[Fixture[F, _]] = tests.toChain.flatMap(_._2.fixtures)
 }
 
 object Suite {

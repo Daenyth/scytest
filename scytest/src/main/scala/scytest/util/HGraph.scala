@@ -4,6 +4,8 @@ import cats._
 import cats.implicits._
 import fs2.{Pure, Stream}
 
+import scala.collection.mutable
+
 private[scytest] object HGraph {
 
   /**
@@ -24,12 +26,14 @@ private[scytest] object HGraph {
       protected[HGraph] val reverseEdges: Map[NodeId, Set[NodeId]]
   ) {
     private val nodeIds: Set[NodeId] = nodes.keySet
+    private val emptyInstance = if (nodes.isEmpty) this else Graph.empty[V]
 
-    assert(nodeIds == edges.keySet)
+    assert(nodeIds == edges.keySet, s"$nodeIds - $edges")
     assert(nodeIds == reverseEdges.keySet)
     assert(edges.values.toSet.flatten.subsetOf(nodeIds))
     assert(reverseEdges.values.toSet.flatten.subsetOf(nodeIds))
 
+    /*
     def add[L](node: Node.Of[V, L], edges: Set[NodeId]): Graph[V] = {
       require(
         !nodeIds.contains(node.id),
@@ -49,19 +53,33 @@ private[scytest] object HGraph {
         }
       )
     }
+     */
 
     def find[L](label: V[L]): Option[Node.Of[V, L]] =
       nodes
         .find(kv => kv._2.label == label)
         .map(kv => kv._2.asInstanceOf[Node.Of[V, L]])
 
+    private[this] val memoLeafFocus: mutable.Map[NodeId, Graph[V]] =
+      mutable.Map.empty
+
     /** A subset of this graph where the only leaf node is `nodeId`, and all other
       *  nodes are either direct or indirect roots of that node
       *
       *  @return Empty graph if nodeId is not present, otherwise the subset
       */
-    def focusOnLeaf(nodeId: NodeId): Graph[V] = {
-      if (!nodes.contains(nodeId)) return Graph.empty[V]
+    def focusOnLeaf(nodeId: NodeId): Graph[V] =
+      if (memoLeafFocus.contains(nodeId)) memoLeafFocus(nodeId)
+      else
+        memoLeafFocus.synchronized {
+          println(s"BUILDING FOCUS $nodeId")
+          val built = buildLeafFocus(nodeId)
+          memoLeafFocus(nodeId) = built
+          built
+        }
+
+    private def buildLeafFocus(nodeId: NodeId): Graph[V] = {
+      if (!nodes.contains(nodeId)) return emptyInstance
 
       var included = Set(nodeId)
       var toFind: Set[NodeId] = Set(nodeId)
@@ -75,6 +93,10 @@ private[scytest] object HGraph {
       }
 
       val newNodes = nodes.filterKeys(included.contains)
+
+      // Optimization to avoid creating new graph instances when possible
+      if (newNodes == nodes) return this
+
       val newEdges = edges.filterKeys(included.contains)
       val newRevEdges = reverseEdges.filterKeys(included.contains)
 
@@ -87,49 +109,42 @@ private[scytest] object HGraph {
     /** Swap the direction of all edges in this graph */
     lazy val reverseDirection: Graph[V] = new Reversed(this)
 
-    private lazy val rootToLeaf: Iterable[Node[V]] = reverseDirection.leafToRoot
-    private lazy val leafToRoot: Iterable[Node[V]] =
-      fs2.Stream
-        .unfold(this) { g =>
-          if (g.isEmpty) None
-          else Some(g.extractLeafs)
-        }
-        .flatMap(ns => Stream.emits(ns.toSeq))
-        .compile
-        .toList
+//    private lazy val rootToLeaf: Iterable[Node[V]] = reverseDirection.leafToRoot
+//    private lazy val leafToRoot: Iterable[Node[V]] =
+//      unfoldLeafs.flatMap(ns => Stream.emits(ns.toSeq)).compile.toList
 
-    /** Monadic visit all nodes in a specified order, producing a new graph with each
-      *  node's label adjusted by `f`, but the graph shape remaining the same
-      */
-    def relabelA[F[_]: Applicative, V2[_]](order: VisitOrder)(
-        f: Visitor[F, V, V2]
-    ): F[Graph[V2]] = {
-      val ns = order match {
-        case VisitOrder.LeafsFirst => leafToRoot
-        case VisitOrder.RootsFirst => rootToLeaf
-      }
+//    /** Monadic visit all nodes in a specified order, producing a new graph with each
+//      *  node's label adjusted by `f`, but the graph shape remaining the same
+//      */
+//    def relabelA[F[_]: Applicative, V2[_]](order: VisitOrder)(
+//        f: Visitor[F, V, V2]
+//    ): F[Graph[V2]] = {
+//      val ns = order match {
+//        case VisitOrder.LeafsFirst => leafToRoot
+//        case VisitOrder.RootsFirst => rootToLeaf
+//      }
+//
+//      ns.toList
+//        .traverse { n =>
+//          f(n.label).map(label => Node(label, n.id))
+//        }
+//        .map { ns =>
+//          new Graph[V2](
+//            ns.map(n => n.id -> n).toMap,
+//            edges,
+//            reverseEdges
+//          )
+//        }
+//    }
 
-      ns.toList
-        .traverse { n =>
-          f(n.label).map(label => Node(label, n.id))
-        }
-        .map { ns =>
-          new Graph[V2](
-            ns.map(n => n.id -> n).toMap,
-            edges,
-            reverseEdges
-          )
-        }
-    }
-
-    /** Modify all label contexts with `f`, producing a new graph with the same shape */
-    def relabel[V2[_]](f: Visitor[cats.Id, V, V2]): Graph[V2] = {
-      val newNodes: Map[NodeId, Node[V2]] = nodes.map {
-        case (nodeId, node) =>
-          nodeId -> Node[V2, node.L](f(node.label), nodeId)
-      }
-      new Graph(newNodes, edges, reverseEdges)
-    }
+//    /** Modify all label contexts with `f`, producing a new graph with the same shape */
+//    def relabel[V2[_]](f: Visitor[cats.Id, V, V2]): Graph[V2] = {
+//      val newNodes: Map[NodeId, Node[V2]] = nodes.map {
+//        case (nodeId, node) =>
+//          nodeId -> Node[V2, node.L](f(node.label), nodeId)
+//      }
+//      new Graph(newNodes, edges, reverseEdges)
+//    }
 
     /** Unfold of `extractLeafs`, "peeling" back one layer of leafs
       *  at a time and producing them in order, until all nodes have been emitted */
@@ -148,16 +163,22 @@ private[scytest] object HGraph {
 
     /** Remove all leaf nodes, producing a new graph without those nodes, and with their edges removed */
     lazy val extractLeafs: (Set[Node[V]], Graph[V]) = {
+      println(s"EXTRACT $this")
       val leafIds = reverseEdges.collect { case (k, v) if v.isEmpty => k }.toSet
       val (leafs, nonLeafs) = nodes.partition(kv => leafIds.contains(kv._1))
-      val newGraph = new Graph[V](
-        nonLeafs,
-        edges.collect {
-          case (from, to) if !leafIds.contains(from) =>
-            from -> to.diff(leafIds)
-        },
-        reverseEdges -- leafIds
-      )
+
+      val newGraph =
+        if (nonLeafs.isEmpty) emptyInstance
+        else
+          new Graph[V](
+            nonLeafs,
+            edges.collect {
+              case (from, to) if !leafIds.contains(from) =>
+                from -> to.diff(leafIds)
+            },
+            reverseEdges -- leafIds
+          )
+
       leafs.values.toSet -> newGraph
     }
 
@@ -191,18 +212,22 @@ private[scytest] object HGraph {
         this.nodes = nodes.updated(node.id, node)
         this.edges = edges
           .asInstanceOf[tl.TList]
-          .foldLeft(this.edges)(new tl.LFold[Id, EdgeMap] {
-            def apply[A](b: EdgeMap, va: V[A]): EdgeMap =
-              b.updated(node.id, b.getOrElse(node.id, Set.empty) + NodeId(va))
-          })
+          .foldLeft(this.edges.updated(node.id, Set.empty))(
+            new tl.LFold[Id, EdgeMap] {
+              def apply[A](b: EdgeMap, va: V[A]): EdgeMap =
+                b.updated(node.id, b.getOrElse(node.id, Set.empty) + NodeId(va))
+            }
+          )
         reverseEdges = edges
           .asInstanceOf[tl.TList]
-          .foldLeft(reverseEdges)(new tl.LFold[Id, EdgeMap] {
-            def apply[A](b: EdgeMap, va: V[A]): EdgeMap = {
-              val vaId = NodeId(va)
-              b.updated(vaId, b.getOrElse(vaId, Set.empty) + node.id)
+          .foldLeft(reverseEdges.updated(node.id, Set.empty))(
+            new tl.LFold[Id, EdgeMap] {
+              def apply[A](b: EdgeMap, va: V[A]): EdgeMap = {
+                val vaId = NodeId(va)
+                b.updated(vaId, b.getOrElse(vaId, Set.empty) + node.id)
+              }
             }
-          })
+          )
       }
 
       // TODO assert cycles fail to build
@@ -210,18 +235,18 @@ private[scytest] object HGraph {
     }
   }
 
-  /** forall [L], `V[L] => F[G[L]]` */
-  trait Visitor[F[_], V[_], G[_]] {
-    def apply[L](label: V[L]): F[G[L]]
-  }
-
-  /** The order in which a graph visitor  */
-  sealed trait VisitOrder
-
-  object VisitOrder {
-    case object LeafsFirst extends VisitOrder
-    case object RootsFirst extends VisitOrder
-  }
+//  /** forall [L], `V[L] => F[G[L]]` */
+//  trait Visitor[F[_], V[_], G[_]] {
+//    def apply[L](label: V[L]): F[G[L]]
+//  }
+//
+//  /** The order in which a graph visitor  */
+//  sealed trait VisitOrder
+//
+//  object VisitOrder {
+//    case object LeafsFirst extends VisitOrder
+//    case object RootsFirst extends VisitOrder
+//  }
 
   trait Node[V[_]] {
     type L
@@ -243,24 +268,21 @@ private[scytest] object HGraph {
     type L = L0
   }
 
-  sealed trait NodeId
+  final class NodeId private (private val value: Any) {
+
+    override def toString: String = s"NodeId($value)"
+
+    override def equals(obj: Any): Boolean = obj match {
+      case other: NodeId => value == other.value
+      case _             => false
+    }
+
+    override def hashCode(): Int = value.hashCode()
+  }
 
   object NodeId {
     // Unsafe / relies on universal equals/hashcode
-    private[HGraph] def apply[T](t: T): NodeId = new NodeIdRef(t)
-  }
-
-  private class NodeIdRef[T](private val t: T) extends NodeId {
-
-    override def toString: String = s"NodeId($t)"
-
-    override def equals(obj: Any): Boolean = obj match {
-      case other: NodeIdRef[_] =>
-        t == other.t
-      case _ => false
-    }
-
-    override def hashCode(): Int = t.hashCode()
+    private[HGraph] def apply[T](t: T): NodeId = new NodeId(t)
   }
 
 }

@@ -12,22 +12,27 @@ class TestRunner[F[_]: Concurrent: ContextShift: Timer](
     pool: FixturePool[F]
 ) {
 
-  def run(rootSuite: Suite[F]): Stream[F, TestResult] =
+  def run(rootSuite: Suite[F]): Stream[F, (Suite.Id, Test.Id, TestResult)] =
     Stream
       .chain(rootSuite.collected.suites)
       .map(runSuite)
       .parJoinUnbounded
       .onFinalize(pool.closeAll)
+      .scope
 
-  // TODO suite-scope resources running in parallel will get shared and cross-terminated
-  private def runSuite(suite: SingleSuite[F]): Stream[F, TestResult] =
+  private def runSuite(
+      suite: SingleSuite[F]
+  ): Stream[F, (Suite.Id, Test.Id, TestResult)] =
     Stream
       .chain(suite.tests)
       .parEvalMapUnordered(Int.MaxValue) {
         case (testId, test) =>
-          runTest(suite.id, testId, test)
+          runTest(suite.id, testId, test).map(
+            result => (suite.id, testId, result)
+          )
       }
       .onFinalize(pool.closeSuite(suite.id))
+      .scope
 
   private def runTest(
       suiteId: Suite.Id,
@@ -38,6 +43,7 @@ class TestRunner[F[_]: Concurrent: ContextShift: Timer](
       test.dependencies.extractRightM(
         λ[FixtureTag.Aux ~> F](tag => pool.get(suiteId, testId, tag))
       )
+
     liveDeps
       .flatMap(d => test.run(d))
       .guarantee(pool.closeTest(testId))

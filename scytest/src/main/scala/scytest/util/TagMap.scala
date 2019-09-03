@@ -1,5 +1,6 @@
 package scytest.util
 
+import cats.data.Chain
 import cats.~>
 import scytest.fixture.FixtureTag
 
@@ -10,6 +11,8 @@ private[scytest] class TagMap[V[_]] private[TagMap] (
 
   def get[T](key: FixtureTag.Aux[T]): V[T] =
     map(key).value.asInstanceOf[V[T]]
+
+  def contains(key: FixtureTag): Boolean = map.contains(key)
 
   def put[T](key: FixtureTag.Aux[T], value: V[T]): TagMap[V] =
     new TagMap[V](map.updated[Entry[V]](key, Entry(key, value)))
@@ -40,7 +43,14 @@ private[scytest] class TagMap[V[_]] private[TagMap] (
 
 private[scytest] object TagMap {
   def empty[V[_]] = new TagMap[V](Map.empty[FixtureTag, Entry[V]])
+
+  def fromChain[V[_]](items: Chain[(FixtureTag, V[_])]): TagMap[V] =
+    fromEntries(items.toVector.map((Entry.of[V] _).tupled))
+
   def of[V[_]](items: Entry[V]*): TagMap[V] =
+    fromEntries(items)
+
+  private def fromEntries[V[_]](items: Seq[Entry[V]]) =
     items.foldLeft(empty[V])((tm, e) => tm.put(e.key, e.value))
 
   trait Entry[V[_]] {
@@ -53,6 +63,9 @@ private[scytest] object TagMap {
   object Entry {
     def apply[V[_], A](key: FixtureTag.Aux[A], value: V[A]): Entry.Aux[V, A] =
       new Impl(key, value)
+
+    def of[V[_]](key: FixtureTag, value: V[_]): Entry[V] =
+      new Impl[V, key.R](key, value.asInstanceOf[V[key.R]])
 
     implicit def fromTuple[V[_], A](kv: (FixtureTag.Aux[A], V[A])): Entry[V] =
       new Impl(kv._1, kv._2)

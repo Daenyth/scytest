@@ -69,10 +69,6 @@ object Fixture {
     new ResourceFixture[F, R](resource, tag)
 }
 
-case class KnownFixture[F[_], R](get: Fixture[F, R]) {
-  val tag: FixtureTag.Aux[R] = get.tag
-}
-
 private[fixture] class ResourceFixture[F[_], R](
     val resource_ : Resource[F, R],
     val tag: FixtureTag.Aux[R]

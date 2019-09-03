@@ -3,22 +3,21 @@ package scytest
 import java.util.UUID
 
 import cats.MonadError
-import scytest.fixture.KnownFixture
 import cats.data.NonEmptyChain
-import scytest.fixture.FTList._
-import shapeless.HNil
+import scytest.fixture.Fixture
 
-abstract class Spec[F[_]](val name: String = getClass.getSimpleName)(
+abstract class Spec[F[_]](
     implicit F: MonadError[F, Throwable]
 ) extends SpecMethods[F]
     with AssertionMethods {
-  def tests: List[Test[F]]
+  def name: String = this.getClass.getSimpleName
+  protected def tests: List[Test[F]]
 
   lazy val toSuite =
     new SingleSuite[F](
-      Suite.Id(newId()),
+      Suite.Id(s"$name - ${newId()}"),
       NonEmptyChain
-        .fromSeq(tests.map(t => Test.Id(newId()) -> t))
+        .fromSeq(tests.map(t => Test.Id(s"${t.name} - ${newId()}") -> t))
         .getOrElse(
           NonEmptyChain
             .one(Test.Id(newId()) -> Test.pass[F](s"Empty suite $name"))
@@ -28,11 +27,13 @@ abstract class Spec[F[_]](val name: String = getClass.getSimpleName)(
   protected final def test(name: String)(body: F[Assertion]): Test[F] =
     new FixturelessTest[F](name, body)
 
-  protected final def testWith[R](name: String)(body: R => F[Assertion])(
-      implicit ev: KnownFixture[F, R]
+  protected final def testWith[R](
+      name: String,
+      fix: Fixture[F, R]
+  )(
+      body: R => F[Assertion]
   ): Test[F] =
-    new FixtureTest(name, ev.tag ::: TNil)((r: shapeless.::[R, HNil]) =>
-      body(r.head))
+    new FixtureTest(name, fix)(body)
 
   protected final implicit def pureAssertion(
       assertion: Assertion

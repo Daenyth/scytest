@@ -1,7 +1,9 @@
 package scytest
 
 import cats.MonadError
+import cats.data.Chain
 import scytest.fixture.FTList._
+import scytest.fixture.Fixture
 
 trait Test[F[_]] {
   type DTags <: TList
@@ -12,6 +14,11 @@ trait Test[F[_]] {
   val name: String
 
   def run(resource: R): F[TestResult]
+
+  // TODO can remove a lot of TList machinery if the test only takes one fixture instead of a list
+  // Then `R` can be known as a single value and we can rely on the graph alone for producing transitive deps.
+  // If `R` is a magnet-style HList of resource types we should be able to synthesize a ProductFixture
+  def fixtures: Chain[Fixture[F, _]]
 }
 
 object Test {
@@ -27,18 +34,20 @@ object Test {
 
 final class FixtureTest[F[_], D <: TList, R0](
     val name: String,
-    val dependencies: D
+    val dependency: Fixture[F, R0] // TODO TList / magnet pattern for R0 detection
 )(
     test: R0 => F[Assertion]
 )(
-    implicit F: MonadError[F, Throwable],
-    ev: R0 =:= D#H
+    implicit F: MonadError[F, Throwable]
 ) extends Test[F] {
-  val _ = ev
-  type DTags = D
-  def run(resource: R): F[TestResult] =
-    TestResult.from(name, test(resource.asInstanceOf[R0]))
 
+  type DTags = R0 ::: dependency.DTags
+  val dependencies: DTags = :::(dependency.tag, dependency.dependencies)
+
+  def run(resource: R): F[TestResult] =
+    TestResult.from(name, test(resource.head))
+
+  val fixtures: Chain[Fixture[F, _]] = Chain(dependency)
 }
 
 final class FixturelessTest[F[_]](val name: String, test: F[Assertion])(
@@ -51,6 +60,8 @@ final class FixturelessTest[F[_]](val name: String, test: F[Assertion])(
   def run(resource: R): F[TestResult] = run_
 
   private val run_ = TestResult.from(name, test)
+
+  val fixtures: Chain[Fixture[F, _]] = Chain.empty
 }
 
 case class RunnableTest[F[_]](run: F[TestResult])
