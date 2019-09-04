@@ -153,11 +153,15 @@ private[scytest] final class BasicPool[F[_]] private (
           .getOrElse(
             sys.error("impossible: graph is missing known fixture")
           )
-        val (roots, _) = graph.focusOnLeaf(node.id).extractRoots
+
         val allocateDeps =
-          roots.toList.traverse_ { n =>
-            allocate(getFix(n.label), suiteId, testId).void
-          }
+          graph
+            .focusOnLeaf(node)
+            .unfoldRoots
+            .flatMap(ns => Stream.emits(ns.toSeq))
+            .evalTap(node => allocate(getFix(node.label), suiteId, testId))
+            .compile
+            .drain
         allocateDeps >> allocate(fix, suiteId, testId)
       }
 
@@ -171,11 +175,9 @@ private[scytest] final class BasicPool[F[_]] private (
     val tagLeakId = leakId(suiteId, testId, tag.scope)
 
     def putLeak(leak: Leak[R]) =
-      ST.modify { fxs =>
-        fxs.put(tag, fxs.get(tag).updated(tagLeakId, leak))
-      }
+      ST.modify(_.modify(tag)(_.updated(tagLeakId, leak)))
 
-    findLeak(tag, tagLeakId).orElseF {
+    OptionT {
       fix match {
         case rf: RootFixture[F, R] =>
           ST.liftF(Leak.of(rf.resource_))

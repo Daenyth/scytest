@@ -17,8 +17,8 @@ private[scytest] object HGraph {
     *
     *
     * Terms:
-    * Root - Points to no other node
-    * Leaf - Is not pointed to by any node
+    * Root - Points to no other node (out-degree is 0)
+    * Leaf - Is not pointed to by any node (in-degree is 0)
     */
   sealed class Graph private[HGraph] (
       protected[HGraph] val nodes: Map[NodeId, Node],
@@ -31,10 +31,10 @@ private[scytest] object HGraph {
     assert(edges.values.toSet.flatten.subsetOf(nodeIds))
     assert(reverseEdges.values.toSet.flatten.subsetOf(nodeIds))
 
-    def find[L](label: FixtureTag.Aux[L]): Option[Node.Of[L]] =
+    def find(label: FixtureTag): Option[NodeId] =
       nodes
         .find(kv => kv._2.label == label)
-        .map(kv => kv._2.asInstanceOf[Node.Of[L]])
+        .map(kv => kv._2.id)
 
     private[this] val memoLeafFocus: mutable.Map[NodeId, Graph] =
       mutable.Map.empty
@@ -82,19 +82,23 @@ private[scytest] object HGraph {
     def nonEmpty: Boolean = !isEmpty
 
     /** Swap the direction of all edges in this graph */
-    lazy val reverseDirection: Graph = new Reversed(this)
+    lazy val reverseDirection: Graph =
+      if (isEmpty) this
+      else new Reversed(this)
 
-    /** Unfold of `extractLeafs`, "peeling" back one layer of leafs
-      *  at a time and producing them in order, until all nodes have been emitted */
+    /** An ordered traversal from leafs to roots */
     val unfoldLeafs: Stream[Pure, Set[Node]] =
       Stream.unfold(this) { g =>
         if (g.isEmpty) None
         else Some(g.extractLeafs)
       }
 
+    /** An (inverse) ordered traversal from roots to leafs. */
+    val unfoldRoots: Stream[Pure, Set[Node]] =
+      reverseDirection.unfoldLeafs
+
     /** Remove all root nodes, producing a new graph without those nodes, and with edges directed to those removed */
     lazy val extractRoots: (Set[Node], Graph) = {
-
       val (ns, g) = reverseDirection.extractLeafs
       (ns, g.reverseDirection)
     }
