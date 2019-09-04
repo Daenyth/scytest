@@ -3,6 +3,7 @@ package scytest.util
 import fs2.{Pure, Stream}
 import scytest.fixture.FixtureTag
 import scytest.util.TagList.TList
+import cats.implicits._
 
 import scala.collection.mutable
 
@@ -139,15 +140,25 @@ private[scytest] object HGraph {
     val empty: Graph = new Graph(Map.empty, Map.empty, Map.empty)
     private type EdgeMap = Map[NodeId, Set[NodeId]]
 
-    def newBuilder(): Builder =
+    /** Given [(node, edges)], return either a graph or reject the build due to precondition failure */
+    def build(
+        items: Iterable[(FixtureTag, TList)]
+    ): Either[Throwable, Graph] = {
+      val b = newBuilder()
+      items.foreach(t => b.add(t._1, t._2))
+      Either.catchNonFatal(b.build())
+    }
+
+    // TODO remove / inline logic to `Graph.build`
+    private def newBuilder(): Builder =
       new Builder(Map.empty, Map.empty, Map.empty)
 
-    class Builder private[Graph] (
+    private class Builder private[Graph] (
         var nodes: Map[NodeId, Node],
         var edges: EdgeMap,
         var reverseEdges: EdgeMap
     ) {
-      def add[L](label: FixtureTag.Aux[L], edges: TList): Unit = {
+      def add(label: FixtureTag, edges: TList): Unit = {
         val node = Node(label, NodeId(label))
         this.nodes = nodes.updated(node.id, node)
         this.edges = edges
@@ -166,23 +177,10 @@ private[scytest] object HGraph {
     }
   }
 
-  trait Node {
-    type L
-    def label: FixtureTag.Aux[L]
-    def id: NodeId
-  }
-
+  final class Node(val label: FixtureTag, val id: NodeId)
   object Node {
-    type Of[L0] = Node { type L = L0 }
-    def apply[L](label: FixtureTag.Aux[L], id: NodeId): Node =
-      new LNode(label, id)
-  }
-
-  private class LNode[L0](
-      val label: FixtureTag.Aux[L0],
-      val id: NodeId
-  ) extends Node {
-    type L = L0
+    def apply(label: FixtureTag, id: NodeId): Node =
+      new Node(label, id)
   }
 
   final class NodeId private (private val value: Any) {

@@ -6,8 +6,9 @@ import cats.effect.concurrent.MVar
 import cats.effect.{Bracket, Clock, Concurrent, Resource, Sync}
 import cats.implicits._
 import cats.{Applicative, ~>}
-import scytest.util.{HGraph, TagMap}
 import fs2.Stream
+import scytest.util.HGraph.Graph
+import scytest.util.TagMap
 
 import scala.concurrent.duration.MILLISECONDS
 
@@ -72,16 +73,18 @@ private[scytest] final class BasicPool[F[_]] private (
     def inspectF[B](f: TagMap[State] => F[B]): ST[B] = StateT.inspectF(f)
     def modify(f: TagMap[State] => TagMap[State]): ST[Unit] = StateT.modify(f)
     def liftF[A](fa: F[A]): ST[A] = StateT.liftF(fa)
+    def whenA[A](cond: Boolean)(f: => ST[A]): ST[Unit] =
+      Applicative[ST].whenA(cond)(f)
   }
 
-  private val graph: HGraph.Graph = {
-    val b = HGraph.Graph.newBuilder()
-    knownFixtures.keys.toList.foreach { t =>
-      val fix = getFix(t)
-      b.add(fix.tag, fix.dependencies)
-    }
-    b.build()
-  }
+  private val graph: Graph =
+    Graph
+      .build(knownFixtures.keys.map { t =>
+        val fix = getFix(t)
+        fix.tag.erase -> fix.dependencies
+      })
+      .right
+      .get // TODO handle error
 
   private def getFix[T <: FixtureTag](tag: T): Fixture[F, tag.R] =
     knownFixtures.get[tag.R](tag)
@@ -100,12 +103,14 @@ private[scytest] final class BasicPool[F[_]] private (
       val leaks: Map[FixtureTag, Leak[_]] =
         fxs.collectValues[Leak[_]](state => state.get(leakId)).toMap
 
-      graph.unfoldLeafs
-        .flatMap(ns => Stream.emits(ns.toSeq))
-        .collect { case n if leaks.contains(n.label) => n.label.erase }
-        .evalMap(tag => close(tag, leakId, leaks(tag)))
-        .compile
-        .drain
+      ST.whenA(leaks.nonEmpty) {
+        graph.unfoldLeafs
+          .flatMap(ns => Stream.emits(ns.toSeq))
+          .collect { case n if leaks.contains(n.label) => n.label.erase }
+          .evalMap(tag => close(tag, leakId, leaks(tag)))
+          .compile
+          .drain
+      }
     }
   }
 
