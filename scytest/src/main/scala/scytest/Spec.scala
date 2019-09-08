@@ -4,6 +4,7 @@ import java.util.UUID
 
 import cats.MonadError
 import cats.data.NonEmptyChain
+import cats.implicits._
 import scytest.fixture.Fixture
 
 abstract class Spec[F[_]](
@@ -40,6 +41,14 @@ abstract class Spec[F[_]](
   ): F[Assertion] =
     F.pure(assertion)
 
+  protected final implicit def unitAssertion(unit: Unit): F[Assertion] = {
+    val _ = unit
+    F.pure(success)
+  }
+
+  protected final implicit def unitFAssertion(unit: F[Unit]): F[Assertion] =
+    unit.as(success)
+
   private def newId() = UUID.randomUUID().toString
 }
 
@@ -50,5 +59,9 @@ trait SpecMethods[F[_]] {
 trait AssertionMethods {
   // TODO source code position macro, replace with expecty, etc
   def assert(cond: Boolean): Assertion =
-    if (cond) Verified else FailedAssertion(new AssertionError())
+    if (cond) success else FailedAssertion(new AssertionError())
+
+  def fail(msg: String): Assertion = FailedAssertion(new AssertionError(msg))
+
+  val success: Assertion = Verified
 }

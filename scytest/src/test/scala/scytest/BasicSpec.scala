@@ -7,7 +7,9 @@ class BasicSpec extends Spec[IO] {
     Test.pass[IO]("ok"),
     test("simple assert") { assert(true) },
     test("fail")(assert(false)),
-    test("throwing")(throw new Exception("throwing test"))
+    test("throwing")(throw new Exception("throwing test")),
+    test("IO failure")(IO.raiseError(new Exception("IO raiseError test"))),
+    test("fail helper")(fail("fail helper"))
   )
 
 }

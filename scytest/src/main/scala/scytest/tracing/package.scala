@@ -33,6 +33,14 @@ package object tracing {
         tc.childSpan(operationName, tags).use(tc2 => fa.run(tc2))
       }
 
+    def spanF[F[_], B](
+        operationName: String,
+        tags: Map[String, String] = Map.empty
+    )(
+        f: TracingContext[F] => F[B]
+    )(implicit F: Bracket[F, Throwable]): TraceT[F, B] =
+      span(operationName, tags)(Kleisli(f))
+
     def wrap[F[_], A](
         operationName: String,
         tags: Map[String, String] = Map.empty

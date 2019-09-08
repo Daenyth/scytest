@@ -1,8 +1,8 @@
 package scytest.fixture
 
-import cats.effect.{Bracket, Resource}
+import cats.effect.{Bracket, ContextShift, Resource, Timer}
 import cats.implicits._
-import cats.{Applicative, Monad}
+import cats.{Applicative, ApplicativeError, Monad}
 import scytest.util.TagList._
 import shapeless.{::, HNil}
 
@@ -46,9 +46,10 @@ object Fixture {
     */
   type Aux[F[_], R, D0] = Fixture[F, R] { type DTags = D0 }
 
-  def pure[F[_]: Applicative, R](value: R)(
-      tagName: String = s"PureFixture($value)"
-  ): Fixture[F, R] =
+  def pure[F[_]: Applicative, R](value: R): Fixture[F, R] =
+    pure(value, s"PureFixture($value)")
+
+  def pure[F[_]: Applicative, R](value: R, tagName: String): Fixture[F, R] =
     new PureFixture[F, R](value, tagName)
 
   def map[F[_]: Applicative, R, R2, DTags <: TList](
@@ -161,4 +162,50 @@ private[fixture] class PureFixture[F[_], R](value: R, tagName: String)(
 ) extends RootFixture[F, R] {
   val tag: FixtureTag.Aux[R] = FixtureTag[R](tagName, FixtureScope.Process)
   val resource_ = Resource.pure[F, R](value)
+}
+
+// Note: This requires special handling from `FixturePool`
+private[scytest] class ContextShiftFixture[F[_]](
+    implicit F: ApplicativeError[F, Throwable]
+) extends Fixture[F, ContextShift[F]] {
+  val tag: FixtureTag.Aux[ContextShift[F]] = ContextShiftFixture.tag[F]
+
+  type DTags = TNil
+  val dependencies: DTags = TNil
+
+  def resource(dependency: D): Resource[F, ContextShift[F]] =
+    Resource.liftF(
+      F.raiseError[ContextShift[F]](
+        new Exception(
+          "ContextShiftFixture requires special handling by FixturePool"
+        )
+      )
+    )
+}
+
+object ContextShiftFixture {
+  def tag[F[_]]: FixtureTag.Aux[ContextShift[F]] =
+    FixtureTag[ContextShift[F]]("ContextShift", FixtureScope.Process)
+}
+
+// Note: This requires special handling from `FixturePool`
+private[scytest] class TimerFixture[F[_]](
+    implicit F: ApplicativeError[F, Throwable]
+) extends Fixture[F, Timer[F]] {
+  val tag: FixtureTag.Aux[Timer[F]] = TimerFixture.tag[F]
+
+  type DTags = TNil
+  val dependencies: DTags = TNil
+
+  def resource(dependency: D): Resource[F, Timer[F]] =
+    Resource.liftF(
+      F.raiseError[Timer[F]](
+        new Exception("TimerFixture requires special handling by FixturePool")
+      )
+    )
+}
+
+object TimerFixture {
+  def tag[F[_]]: FixtureTag.Aux[Timer[F]] =
+    FixtureTag[Timer[F]]("Timer", FixtureScope.Process)
 }

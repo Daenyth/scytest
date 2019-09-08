@@ -3,9 +3,10 @@ package fixture
 
 import cats.data.{OptionT, StateT}
 import cats.effect.concurrent.MVar
-import cats.effect.{Bracket, Concurrent, Resource}
+import cats.effect.{Bracket, Concurrent, ContextShift, Resource, Timer}
 import cats.implicits._
 import cats.{Applicative, ~>}
+import com.colisweb.tracing.implicits._
 import fs2.Stream
 import scytest.tracing.TraceT
 import scytest.util.HGraph.Graph
@@ -72,14 +73,19 @@ private[scytest] final class ConcurrentFixturePool[F[_]] private (
   private def withCache[A](
       operationName: String,
       tags: Map[String, String]
-  )(f: ST[A]): TF[A] =
-    TraceT.wrap("fixture-pool-mutex", tags + ("operation" -> operationName)) {
+  )(f: ST[A]): TF[A] = {
+    val tagsʹ = tags + ("operation" -> operationName)
+
+    TraceT.spanF("fixture-pool-mutex", tagsʹ) { tc =>
       for {
-        fxs <- cache.take
+        fxs <- tc
+          .childSpan("fixture-pool-mutex-take", tagsʹ)
+          .wrap(cache.take)
         (updated, result) <- f.run(fxs)
         _ <- cache.put(updated)
       } yield result
     }
+  }
 
   private def close(tag: FixtureTag, id: LeakId, leak: Leak[_]): ST[Unit] =
     ST.liftF(leak.close) >>
@@ -196,16 +202,36 @@ private[scytest] final class ConcurrentFixturePool[F[_]] private (
 
 object ConcurrentFixturePool {
 
-  def create[F[_]: Concurrent](
+  def create[F[_]](
       fixtures: TagMap[Fixture[F, ?]]
-  ): F[ConcurrentFixturePool[F]] =
+  )(
+      implicit F: Concurrent[F],
+      timer: Timer[F],
+      cs: ContextShift[F]
+  ): F[ConcurrentFixturePool[F]] = {
+    val timerFix = scytest.fixtures.timer[F]
+    val csFix = scytest.fixtures.contextShift[F]
     for {
       cache <- MVar[F].of(
-        fixtures.mapEntries[State[F, ?]] { e =>
-          e.map(_ => Map.empty: State[F, e.A])
-        }
+        fixtures
+          .mapEntries[State[F, ?]] { e =>
+            e.map(_ => Map.empty: State[F, e.A])
+          }
+          .put(
+            timerFix.tag,
+            Map(LeakId.ProcessId -> Leak(timer, F.unit))
+          )
+          .put(
+            csFix.tag,
+            Map(LeakId.ProcessId -> Leak(cs, F.unit))
+          )
       )
-    } yield new ConcurrentFixturePool[F](fixtures, cache)
+    } yield
+      new ConcurrentFixturePool[F](
+        fixtures.put(timerFix.tag, timerFix).put(csFix.tag, csFix),
+        cache
+      )
+  }
 
   private[fixture] type State[F[_], R] = Map[LeakId, Leak[F, R]]
 
