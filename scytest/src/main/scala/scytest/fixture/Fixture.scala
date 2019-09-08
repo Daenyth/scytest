@@ -1,6 +1,6 @@
 package scytest.fixture
 
-import cats.effect.Resource
+import cats.effect.{Bracket, Resource}
 import cats.implicits._
 import cats.{Applicative, Monad}
 import scytest.util.TagList._
@@ -19,6 +19,13 @@ sealed abstract class Fixture[F[_], R] {
   /** Construct the resource from the initialized dependencies */
   def resource(dependency: D): Resource[F, R]
 
+  final def withName(name: String): Fixture.Aux[F, R, DTags] =
+    new RenamedFixture(this, name)
+
+  def map[R2](f: R => R2)(
+      implicit F: Applicative[F]
+  ): Fixture.Aux[F, R2, DTags] =
+    new MappedFixture(this, f)
 }
 
 /** A fixture that has no dependencies and can a root of the dependency DAG */
@@ -44,10 +51,17 @@ object Fixture {
   ): Fixture[F, R] =
     new PureFixture[F, R](value, tagName)
 
+  def map[F[_]: Applicative, R, R2, DTags <: TList](
+      fixture: Fixture.Aux[F, R, DTags]
+  )(
+      f: R => R2
+  ): Fixture.Aux[F, R2, DTags] =
+    new MappedFixture(fixture, f)
+
   def from[F[_]: Monad, D, R](name: String, dependency: FixtureTag.Aux[D])(
       f: D => Resource[F, R]
   ): Fixture.Aux[F, R, D ::: TNil] =
-    new FlatMapFixture[F, D, R](name, dependency, f)
+    new FlatMapFixture(name, dependency, f)
 
   def both[F[_], D1, D2, R](
       dep1: FixtureTag.Aux[D1],
@@ -59,13 +73,44 @@ object Fixture {
     R,
     D1 ::: D2 ::: TNil
   ] =
-    new MapNFixture[F, D1, D2, R](dep1, dep2)((d1, d2) => f(d1 :: d2 :: HNil))
+    new MapNFixture(dep1, dep2)((d1, d2) => f(d1 :: d2 :: HNil))
+
+  def make[F[_], R](tagName: String, scope: FixtureScope)(acquire: F[R])(
+      release: R => F[Unit]
+  )(implicit F: Bracket[F, Throwable]): Fixture.Aux[F, R, TNil] =
+    resource(FixtureTag[R](tagName, scope), Resource.make(acquire)(release))
 
   def resource[F[_], R](
-      resource: Resource[F, R],
-      tag: FixtureTag.Aux[R]
+      tag: FixtureTag.Aux[R],
+      resource: Resource[F, R]
   ): Fixture.Aux[F, R, TNil] =
     new ResourceFixture[F, R](resource, tag)
+}
+
+private[fixture] class MappedFixture[F[_]: Applicative, R, R2, D0 <: TList](
+    fixture: Fixture.Aux[F, R, D0],
+    f: R => R2
+) extends Fixture[F, R2] {
+
+  val tag: FixtureTag.Aux[R2] =
+    FixtureTag[R2](s"Mapped(${fixture.tag}, $f)", fixture.tag.scope)
+  type DTags = D0
+  val dependencies: DTags = fixture.dependencies
+
+  def resource(dependency: D): Resource[F, R2] =
+    fixture.resource(dependency.asInstanceOf[fixture.D]).map(f)
+}
+
+private[fixture] class RenamedFixture[F[_], R, D0 <: TList](
+    base: Fixture.Aux[F, R, D0],
+    name: String
+) extends Fixture[F, R] {
+  val tag: FixtureTag.Aux[R] = FixtureTag[R](name, base.tag.scope)
+  type DTags = D0
+  val dependencies: DTags = base.dependencies
+
+  def resource(dependency: D): Resource[F, R] =
+    base.resource(dependency.asInstanceOf[base.D])
 }
 
 private[fixture] class ResourceFixture[F[_], R](
