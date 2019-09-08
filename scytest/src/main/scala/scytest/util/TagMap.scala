@@ -1,7 +1,6 @@
 package scytest.util
 
 import cats.data.Chain
-import cats.~>
 import scytest.fixture.FixtureTag
 
 private[scytest] class TagMap[V[_]] private[TagMap] (
@@ -20,14 +19,9 @@ private[scytest] class TagMap[V[_]] private[TagMap] (
   def modify[T](key: FixtureTag.Aux[T])(f: V[T] => V[T]): TagMap[V] =
     put(key, f(get(key)))
 
-  def mapE[V2[_]](
-      f: Entry.Aux[V, ?] ~> Entry.Aux[V2, ?]
-  ): TagMap[V2] = {
+  def mapEntries[V2[_]](f: Entry[V] => Entry[V2]): TagMap[V2] = {
     val newMap: Map[FixtureTag, Entry[V2]] =
-      map.map {
-        case (k, e) =>
-          k -> f.apply[e.A](e).asInstanceOf[Entry[V2]]
-      }
+      map.map { case (k, e) => k -> f(e) }
     new TagMap[V2](newMap)
   }
 

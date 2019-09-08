@@ -23,8 +23,6 @@ object TagList {
       */
     def extractRightM[F[_]: Monad](f: FixtureTag.Aux ~> F): F[H]
 
-    def existentially: List[FixtureTag.Aux[_]]
-
     /** right monadic fold (starting at the tail) given a function `forall [A], (FixtureTag.Aux[A], B) => F[B]` */
     def foldRightVM[F[_]: Monad, B](init: B)(f: (FixtureTag, B) => F[B]): F[B]
 
@@ -46,8 +44,6 @@ object TagList {
 
     def extractRightM[F[_]: Monad](f: FixtureTag.Aux ~> F): F[HNil] =
       (HNil: HNil).pure[F]
-
-    val existentially: List[FixtureTag.Aux[_]] = Nil
 
     def :::[H0](h: FixtureTag.Aux[H0]): H0 ::: TNil = TagList.:::(h, this)
 
@@ -76,8 +72,6 @@ object TagList {
         tl <- tail.extractRightM(f)
         hd <- f(head)
       } yield hd :: tl
-
-    lazy val existentially: List[FixtureTag.Aux[_]] = head :: tail.existentially
 
     def foldRightVM[F[_]: Monad, B](init: B)(f: (FixtureTag, B) => F[B]): F[B] =
       tail.foldRightVM(init)(f).flatMap(b => f(head, b))
