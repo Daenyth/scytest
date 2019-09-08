@@ -18,10 +18,11 @@ object TestResult {
   case class ResourceDead(testName: String, tag: FixtureTag) extends TestResult
   case class Multiple(results: NonEmptyVector[TestResult]) extends TestResult
 
-  def from[F[_]](name: String, test: F[Assertion])(
+  def from[F[_]](name: String, test: => F[Assertion])(
       implicit F: MonadError[F, Throwable]
   ): F[TestResult] =
-    test
+    F.catchNonFatal(test)
+      .flatten
       .map {
         case Verified => TestResult.Success(name)
         case f: FailedAssertion =>

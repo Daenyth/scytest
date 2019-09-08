@@ -24,7 +24,7 @@ abstract class Spec[F[_]](
         )
     )
 
-  protected final def test(name: String)(body: F[Assertion]): Test[F] =
+  protected final def test(name: String)(body: => F[Assertion]): Test[F] =
     new FixturelessTest[F](name, body)
 
   protected final def testWith[R](

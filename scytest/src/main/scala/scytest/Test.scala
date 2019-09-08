@@ -50,7 +50,7 @@ final class FixtureTest[F[_], D <: TList, R0](
   val fixtures: Chain[Fixture[F, _]] = Chain(dependency)
 }
 
-final class FixturelessTest[F[_]](val name: String, test: F[Assertion])(
+final class FixturelessTest[F[_]](val name: String, test: => F[Assertion])(
     implicit F: MonadError[F, Throwable]
 ) extends Test[F] {
 
