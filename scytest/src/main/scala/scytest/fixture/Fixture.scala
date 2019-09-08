@@ -64,7 +64,19 @@ object Fixture {
   ): Fixture.Aux[F, R, D ::: TNil] =
     new FlatMapFixture(name, dependency, f)
 
-  def both[F[_], D1, D2, R](
+  def tupled[F[_]: Applicative, D1, D2](
+      dep1: FixtureTag.Aux[D1],
+      dep2: FixtureTag.Aux[D2]
+  ): Fixture.Aux[
+    F,
+    (D1, D2),
+    D1 ::: D2 ::: TNil
+  ] =
+    new MapNFixture(dep1, dep2)(
+      (d1, d2) => Resource.pure[F, (D1, D2)]((d1, d2))
+    )
+
+  def mapN[F[_], D1, D2, R](
       dep1: FixtureTag.Aux[D1],
       dep2: FixtureTag.Aux[D2]
   )(

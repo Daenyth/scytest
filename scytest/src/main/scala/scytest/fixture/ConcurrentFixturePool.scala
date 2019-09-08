@@ -36,10 +36,9 @@ private[scytest] final class ConcurrentFixturePool[F[_]] private (
     Graph
       .build(knownFixtures.keys.map { t =>
         val fix = getFix(t)
-        fix.tag.erase -> fix.dependencies
+        t -> fix.dependencies
       })
-      .right
-      .get // TODO handle error
+      .fold(throw _, identity) // TODO handle error
 
   private def getFix[T <: FixtureTag](tag: T): Fixture[F, tag.R] =
     knownFixtures.get[tag.R](tag)

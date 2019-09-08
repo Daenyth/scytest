@@ -36,6 +36,17 @@ abstract class Spec[F[_]](
   ): Test[F] =
     new FixtureTest(name, fix)(body)
 
+  protected final def testWith[R1, R2](
+      name: String,
+      fix1: Fixture[F, R1],
+      fix2: Fixture[F, R2]
+  )(
+      body: (R1, R2) => F[Assertion]
+  ): Test[F] =
+    new FixtureTest(name, Fixture.tupled[F, R1, R2](fix1.tag, fix2.tag))(
+      body.tupled
+    )
+
   protected final implicit def pureAssertion(
       assertion: Assertion
   ): F[Assertion] =

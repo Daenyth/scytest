@@ -28,7 +28,8 @@ private[scytest] object HGraph {
   ) {
     private val nodeIds: Set[NodeId] = nodes.keySet
     assert(nodeIds == edges.keySet, s"$nodeIds - $edges")
-    assert(nodeIds == reverseEdges.keySet)
+    assert(nodeIds == reverseEdges.keySet,
+           s"\n$nodeIds\n!=\n${reverseEdges.keys}")
     assert(edges.values.toSet.flatten.subsetOf(nodeIds))
     assert(reverseEdges.values.toSet.flatten.subsetOf(nodeIds))
 

@@ -14,10 +14,11 @@ class FixtureSpec extends Spec[IO] {
     },
     testWith("cs shift", fixtures.contextShift[IO]) { cs =>
       cs.shift
+    },
+    testWith("blocker", fixtures.blocker, fixtures.contextShift[IO]) {
+      (blocker, cs) =>
+        blocker.blockOn(IO(Thread.sleep(75)))(cs)
     }
-//      testWith ("blocker", fixtures.blocker) { blocker =>
-//        blocker.blockOn(IO(Thread.sleep(75)))
-//      }
   )
 
   private val pure1Fix: Fixture[IO, Int] =

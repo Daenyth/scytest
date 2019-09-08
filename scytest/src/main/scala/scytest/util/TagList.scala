@@ -1,7 +1,7 @@
 package scytest.util
 
-import cats.{Id, Monad, ~>}
 import cats.implicits._
+import cats.{Id, Monad, ~>}
 import scytest.fixture.FixtureTag
 import shapeless.{::, HList, HNil}
 
