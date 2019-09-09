@@ -13,10 +13,6 @@ object TagList {
     /** The underlying `A` types of this TList as an HList, eg `A :: B :: C :: HNil` */
     type H <: HList
 
-    /** The type of this TList as an HList, eg `FixtureTag.Aux[A] :: FixtureTag.Aux[B] :: FixtureTag.Aux[C] :: HNil` */
-    type HV <: HList
-    def toHList: HV
-
     /** Extract the underlying `A` values given a natural transformation.
       *
       * `f` is evaluated on the tail element first, moving toward head on each iteration
@@ -39,8 +35,6 @@ object TagList {
   sealed trait TNil extends TList {
 
     type H = HNil
-    type HV = HNil
-    val toHList: HV = HNil
 
     def extractRightM[F[_]: Monad](f: FixtureTag.Aux ~> F): F[HNil] =
       (HNil: HNil).pure[F]
@@ -64,8 +58,6 @@ object TagList {
       TagList.:::(h, this)
 
     type H = Hd :: tail.H
-    type HV = FixtureTag.Aux[Hd] :: tail.HV
-    lazy val toHList: HV = head :: tail.toHList
 
     def extractRightM[F[_]: Monad](f: FixtureTag.Aux ~> F): F[H] =
       for {

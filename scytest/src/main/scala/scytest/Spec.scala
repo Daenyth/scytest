@@ -6,6 +6,10 @@ import cats.MonadError
 import cats.data.NonEmptyChain
 import cats.implicits._
 import scytest.fixture.Fixture
+import scytest.util.PolyUtil.{TagFn, fixtureToTag, onlyFixtures, toTag}
+import shapeless.HList
+import shapeless.ops.hlist.Mapper
+import shapeless.ops.tuple
 
 abstract class Spec[F[_]](
     implicit F: MonadError[F, Throwable]
@@ -43,9 +47,21 @@ abstract class Spec[F[_]](
   )(
       body: (R1, R2) => F[Assertion]
   ): Test[F] =
-    new FixtureTest(name, Fixture.tupled[F, R1, R2](fix1.tag, fix2.tag))(
+    new FixtureTest(name, Fixture.tupled[F, R1, R2](fix1, fix2))(
       body.tupled
     )
+
+  protected final def testWith[P <: Product](
+      name: String,
+      fixtures: P
+  )(
+      implicit productIsFixturesEvidence: tuple.Mapper[P, onlyFixtures.type],
+      tagFn: TagFn[P]
+  ): (tagFn.Objs => F[Assertion]) => Test[F] = { body =>
+    new FixtureTest(name, Fixture.tupled[F, R1, R2](fix1, fix2))(
+      body.tupled
+    )
+  }
 
   protected final implicit def pureAssertion(
       assertion: Assertion
