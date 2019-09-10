@@ -24,7 +24,6 @@ class TestRunner[F[_]: Concurrent: ContextShift: Timer](
         .map(runSuite(tc, _))
         .parJoinUnbounded
         .onFinalize(pool.closeAll.run(tc))
-        .scope
     }
 
   private def runSuite(
@@ -44,7 +43,6 @@ class TestRunner[F[_]: Concurrent: ContextShift: Timer](
             )
         }
         .onFinalize(pool.closeSuite(suite.id).run(tc))
-        .scope
     }
 
   private def runTest(
