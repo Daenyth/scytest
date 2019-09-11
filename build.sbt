@@ -14,7 +14,7 @@ lazy val scytest = (project in file("scytest"))
   .settings(
     commonSettings,
     libraryDependencies ++= Seq(
-      "co.fs2" %% "fs2-core" % "1.1.0-M2",
+      "co.fs2" %% "fs2-core" % "2.0.0",
       "io.chrisdavenport" %% "cats-par" % "0.2.1",
       "com.chuusai" %% "shapeless" % "2.3.3",
       "io.opentracing.brave" % "brave-opentracing" % "0.34.2",
