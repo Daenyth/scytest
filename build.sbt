@@ -18,7 +18,7 @@ lazy val scytest = (project in file("scytest"))
       "io.chrisdavenport" %% "cats-par" % "0.2.1",
       "com.chuusai" %% "shapeless" % "2.3.3",
       "io.opentracing.brave" % "brave-opentracing" % "0.34.2",
-      "com.colisweb" %% "scala-opentracing" % "0.0.6",
+      "com.colisweb" %% "scala-opentracing" % "0.0.7",
       "io.zipkin.reporter2" % "zipkin-sender-urlconnection" % "2.10.0",
       "org.typelevel" %% "cats-tagless-macros" % "0.9"
     )
