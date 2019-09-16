@@ -4,7 +4,7 @@ import cats.data.OptionT
 import cats.effect.{Resource, Sync}
 import cats.implicits._
 import com.colisweb.tracing.TracingContext
-import com.colisweb.tracing.TracingContext.TracingContextResource
+import com.colisweb.tracing.TracingContextResource
 import zipkin2.Span
 import zipkin2.reporter.{AsyncReporter, Sender}
 
